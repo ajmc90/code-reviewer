@@ -7,6 +7,7 @@ import { looksLikeSshAuthError, unlockSshKeyInteractive } from '../git/sshAuth';
 export interface ReviewPanelDeps {
   getGit: () => GitService | null;
   startReview: (base: string, head: string, passes?: Partial<PassConfig>) => Promise<void>;
+  cancelReview: () => void;
 }
 
 /**
@@ -88,6 +89,8 @@ export class ReviewPanel {
             ? sanitizePasses(msg.passes)
             : undefined;
           await this.deps.startReview(String(msg.base), String(msg.head), passes);
+        } else if (msg?.type === 'cancelReview') {
+          this.deps.cancelReview();
         } else if (msg?.type === 'aheadBehind' && msg.base && msg.head) {
           await this.computeAheadBehind(String(msg.base), String(msg.head), String(msg.reqId || ''));
         }
@@ -365,6 +368,12 @@ header{
   font-weight: 600;
 }
 .btn--primary:hover{ background: var(--accent-hover) }
+.btn--danger{
+  background: var(--vscode-errorForeground, #d13438);
+  color: #fff;
+  font-weight: 600;
+}
+.btn--danger:hover{ filter: brightness(1.1) }
 
 /* ─────────────────────────────────────────────────────────────────
  * Two-pane layout — resizable left pane + drag gutter + collapsible
@@ -1464,10 +1473,15 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     const passActive = Object.values(state.passes).some(Boolean);
     const ok = !!state.selectedBase && !!state.selectedHead && state.selectedBase !== state.selectedHead && !state.isRunning && passActive;
     const startBtn = $('#btn-start');
-    startBtn.setAttribute('aria-disabled', ok ? 'false' : 'true');
+    // While running, the same button doubles as Stop. Mutually-exclusive class
+    // toggles keep the visual state in sync with the action it performs.
+    startBtn.classList.toggle('btn--primary', !state.isRunning);
+    startBtn.classList.toggle('btn--danger', state.isRunning);
+    startBtn.setAttribute('aria-disabled', state.isRunning ? 'false' : (ok ? 'false' : 'true'));
     if (state.isRunning){
-      startBtn.innerHTML = '<span aria-hidden="true">⏳</span> Running…';
-      startBtn.setAttribute('aria-label', 'Review running');
+      startBtn.innerHTML = '<span aria-hidden="true">■</span> Stop review';
+      startBtn.setAttribute('aria-label', 'Stop running review');
+      startBtn.title = 'Cancel the in-progress review';
     } else if (!passActive){
       startBtn.innerHTML = '<span aria-hidden="true">▶</span> Pick at least one pass';
       startBtn.setAttribute('aria-label', 'Select at least one analysis pass first');
@@ -1759,15 +1773,22 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     syncStartBtn();
   }
   function syncStartBtn(){
-    // Mirror renderBranchPicker disable conditions but consider passes too.
+    // While running the button is a Stop button — always enabled. Otherwise it
+    // mirrors renderBranchPicker's enable conditions.
+    if (state.isRunning){
+      // Delegate the full styling refresh to renderBranchPicker, which handles
+      // the Stop variant. We just make sure nothing here re-disables it.
+      const b = $('#btn-start'); if (b) b.setAttribute('aria-disabled', 'false');
+      return;
+    }
     const passActive = Object.values(state.passes).some(Boolean);
     const ok = !!state.selectedBase && !!state.selectedHead
       && state.selectedBase !== state.selectedHead
-      && !state.isRunning && passActive;
+      && passActive;
     const startBtn = $('#btn-start');
     if (!startBtn) return;
     startBtn.setAttribute('aria-disabled', ok ? 'false' : 'true');
-    if (!passActive && !state.isRunning){
+    if (!passActive){
       startBtn.title = 'Pick at least one analysis pass';
     } else {
       startBtn.removeAttribute('title');
@@ -1957,7 +1978,15 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     vscode.postMessage({type:'fetchBranches', prune:true});
   });
   $('#btn-start').addEventListener('click', () => {
-    if (state.isRunning) return;
+    if (state.isRunning){
+      // Acts as Stop while running. Disable immediately so it can't be
+      // double-clicked while the cancellation propagates.
+      const b = $('#btn-start');
+      b.setAttribute('aria-disabled', 'true');
+      b.innerHTML = '<span aria-hidden="true">■</span> Stopping…';
+      vscode.postMessage({type:'cancelReview'});
+      return;
+    }
     if ($('#btn-start').getAttribute('aria-disabled') === 'true') return;
     vscode.postMessage({
       type:'startReview',

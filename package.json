@@ -45,6 +45,12 @@
         "category": "Claude Review"
       },
       {
+        "command": "claudeReviewer.cancelReview",
+        "title": "Claude Review: Cancel Running Review",
+        "category": "Claude Review",
+        "icon": "$(stop-circle)"
+      },
+      {
         "command": "claudeReviewer.reviewChangedFiles",
         "title": "Claude Review: Review Uncommitted Changes",
         "category": "Claude Review"

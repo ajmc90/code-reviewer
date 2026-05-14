@@ -33,6 +33,17 @@ export async function activate(context: vscode.ExtensionContext) {
     output,
   );
 
+  // The active review's cancellation source. Multiple UI affordances feed into it:
+  // the progress notification's X, the panel's Stop button, and the
+  // `claudeReviewer.cancelReview` command. Cleared when the review settles.
+  let currentReviewCts: vscode.CancellationTokenSource | null = null;
+  const cancelCurrentReview = () => {
+    if (currentReviewCts) {
+      log('Cancellation requested.');
+      currentReviewCts.cancel();
+    }
+  };
+
   let lastResult: ReviewResult | null = context.workspaceState.get<ReviewResult>(CACHE_KEY) ?? null;
   if (lastResult) {
     findingsTree.setResult(lastResult);
@@ -57,6 +68,7 @@ export async function activate(context: vscode.ExtensionContext) {
     startReview: async (base: string, head: string, passes?: Partial<PassConfig>) => {
       await runReview({ baseBranch: base, headBranch: head, passes: passes as PassConfig | undefined });
     },
+    cancelReview: () => cancelCurrentReview(),
   };
 
   const getWorkspaceRoot = (): string | null => {
@@ -161,37 +173,56 @@ export async function activate(context: vscode.ExtensionContext) {
     bus.reset();
     ReviewPanel.show(context, bus, panelDeps);
 
-    await vscode.window.withProgress(
-      {
-        location: vscode.ProgressLocation.Notification,
-        title: `Reviewing ${finalOpts.headBranch} vs ${finalOpts.baseBranch}`,
-        cancellable: true,
-      },
-      async (progress, token) => {
-        try {
-          const orchestrator = buildOrchestrator(root, token, progress);
-          const result = await orchestrator.review(finalOpts);
-          await setResult(result);
-          const sev = result.findings.reduce((acc: Record<string, number>, f: Finding) => {
-            acc[f.severity] = (acc[f.severity] || 0) + 1;
-            return acc;
-          }, {});
-          const msg = `Review done · verdict: ${result.summary.overallVerdict} · critical:${sev.critical || 0} major:${sev.major || 0} minor:${sev.minor || 0}`;
-          vscode.window.showInformationMessage(msg, 'Open Panel').then((pick) => {
-            if (pick === 'Open Panel') vscode.commands.executeCommand('claudeReviewer.showPanel');
-          });
-        } catch (e: any) {
-          if ((e?.message ?? '').toLowerCase().includes('cancelled')) {
-            log('Review cancelled.');
-            bus.emit({ kind: 'cancelled', at: Date.now() });
-            return;
+    if (currentReviewCts) {
+      // A previous review is already running — refuse to start another so we
+      // don't end up with two orchestrators racing on the same workspace.
+      vscode.window.showWarningMessage(
+        'A review is already running. Cancel it first (Stop button in the panel or "Claude Review: Cancel Running Review").',
+      );
+      return;
+    }
+    const cts = new vscode.CancellationTokenSource();
+    currentReviewCts = cts;
+
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Reviewing ${finalOpts.headBranch} vs ${finalOpts.baseBranch}`,
+          cancellable: true,
+        },
+        async (progress, progressToken) => {
+          // Bridge VS Code's progress-X token into our central CTS so any UI
+          // affordance cancels the same operation.
+          progressToken.onCancellationRequested(() => cts.cancel());
+          try {
+            const orchestrator = buildOrchestrator(root, cts.token, progress);
+            const result = await orchestrator.review(finalOpts);
+            await setResult(result);
+            const sev = result.findings.reduce((acc: Record<string, number>, f: Finding) => {
+              acc[f.severity] = (acc[f.severity] || 0) + 1;
+              return acc;
+            }, {});
+            const msg = `Review done · verdict: ${result.summary.overallVerdict} · critical:${sev.critical || 0} major:${sev.major || 0} minor:${sev.minor || 0}`;
+            vscode.window.showInformationMessage(msg, 'Open Panel').then((pick) => {
+              if (pick === 'Open Panel') vscode.commands.executeCommand('claudeReviewer.showPanel');
+            });
+          } catch (e: any) {
+            if ((e?.message ?? '').toLowerCase().includes('cancelled')) {
+              log('Review cancelled.');
+              bus.emit({ kind: 'cancelled', at: Date.now() });
+              return;
+            }
+            log(`Review failed: ${e?.stack ?? e?.message ?? e}`);
+            bus.emit({ kind: 'log', level: 'error', message: e?.message ?? String(e), at: Date.now() });
+            vscode.window.showErrorMessage(`Claude Review failed: ${e?.message ?? e}`);
           }
-          log(`Review failed: ${e?.stack ?? e?.message ?? e}`);
-          bus.emit({ kind: 'log', level: 'error', message: e?.message ?? String(e), at: Date.now() });
-          vscode.window.showErrorMessage(`Claude Review failed: ${e?.message ?? e}`);
-        }
-      },
-    );
+        },
+      );
+    } finally {
+      currentReviewCts = null;
+      cts.dispose();
+    }
   }
 
   context.subscriptions.push(
@@ -204,6 +235,13 @@ export async function activate(context: vscode.ExtensionContext) {
       if (lastResult) panel.setResult(lastResult);
     }),
     vscode.commands.registerCommand('claudeReviewer.reviewCurrentBranch', () => runReview({})),
+    vscode.commands.registerCommand('claudeReviewer.cancelReview', () => {
+      if (!currentReviewCts) {
+        vscode.window.showInformationMessage('No review is currently running.');
+        return;
+      }
+      cancelCurrentReview();
+    }),
     vscode.commands.registerCommand('claudeReviewer.reviewChangedFiles', async () => {
       // Compare HEAD against working tree by diffing HEAD against itself with --no-index style.
       const root = getWorkspaceRoot();

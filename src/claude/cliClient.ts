@@ -87,6 +87,10 @@ export class ClaudeCliClient {
       let lineBuf = '';
       let stderr = '';
       let killed = false;
+      // Diagnostics surfaced when the CLI exits non-zero. The CLI emits the real
+      // failure reason (e.g. SSL/proxy errors, auth refresh failures) as JSON events
+      // on stdout — not on stderr — so without this the user sees an empty stderr.
+      const diagnostics: string[] = [];
 
       const timeout = setTimeout(() => {
         killed = true;
@@ -98,6 +102,16 @@ export class ClaudeCliClient {
         opts.signal.onCancellationRequested(() => {
           killed = true;
           proc.kill('SIGTERM');
+          // If the CLI is stuck mid-handshake (e.g. SSL retry loop), SIGTERM
+          // can be absorbed. Escalate to SIGKILL so the user can actually
+          // cancel and restart.
+          setTimeout(() => {
+            try {
+              if (proc.exitCode === null && proc.signalCode === null) {
+                proc.kill('SIGKILL');
+              }
+            } catch { /* already gone */ }
+          }, 2000).unref?.();
           clearTimeout(timeout);
           reject(new Error('Cancelled'));
         });
@@ -117,7 +131,9 @@ export class ClaudeCliClient {
           try {
             evt = JSON.parse(line);
           } catch {
-            // Not JSON — pass through as a stdout chunk so the UI sees something
+            // Not JSON — usually a plain-text error (e.g. "API Error: SSL
+            // certificate verification failed"). Keep it for the failure message.
+            diagnostics.push(line);
             opts.onStdout?.(line);
             continue;
           }
@@ -127,6 +143,7 @@ export class ClaudeCliClient {
             // sequences), keep the longest one — it's the most complete.
             setAssistant: (t) => { if (t.length > assistantText.length) assistantText = t; },
             setResult: (t) => { resultText = t; },
+            addDiagnostic: (t) => diagnostics.push(t),
           });
         }
       });
@@ -143,11 +160,7 @@ export class ClaudeCliClient {
         clearTimeout(timeout);
         if (killed) return;
         if (code !== 0) {
-          reject(
-            new Error(
-              `Claude CLI exited ${code}. Stderr:\n${stderr.slice(-2000)}\n\nIs '${this.cliPath}' installed and authenticated? Try running it once in a terminal.`,
-            ),
-          );
+          reject(new Error(buildFailureMessage(this.cliPath, code, stderr, diagnostics, rawOutput)));
           return;
         }
 
@@ -187,9 +200,47 @@ export class ClaudeCliClient {
 }
 
 interface TextSinks {
-  appendStream: (text: string) => void;   // text_delta chunks (mid-stream)
-  setAssistant: (text: string) => void;   // text from `assistant` event
-  setResult:    (text: string) => void;   // text from `result/success` event
+  appendStream:  (text: string) => void;  // text_delta chunks (mid-stream)
+  setAssistant:  (text: string) => void;  // text from `assistant` event
+  setResult:     (text: string) => void;  // text from `result/success` event
+  addDiagnostic: (text: string) => void;  // api_retry / result error / other failure signals
+}
+
+/**
+ * Builds a useful failure message when the CLI exits non-zero.
+ *
+ * The CLI's real failure reason (SSL/proxy errors, auth refresh, rate limits,
+ * etc.) is emitted as JSON events on stdout — not stderr. Without surfacing
+ * those, the user sees "Stderr:\n" with nothing after it and a misleading
+ * "is it installed?" hint. This collects the actual signals.
+ */
+function buildFailureMessage(
+  cliPath: string,
+  code: number | null,
+  stderr: string,
+  diagnostics: string[],
+  rawOutput: string,
+): string {
+  const parts: string[] = [`Claude CLI exited ${code}.`];
+
+  const stderrTail = stderr.trim();
+  if (stderrTail) parts.push(`Stderr:\n${stderrTail.slice(-2000)}`);
+
+  if (diagnostics.length > 0) {
+    // Keep the last few — for retry loops the final attempt is the most
+    // informative, and earlier ones are usually duplicates.
+    const tail = diagnostics.slice(-5).join('\n');
+    parts.push(`Diagnostics from stdout:\n${tail}`);
+  } else if (!stderrTail && rawOutput.trim()) {
+    // No structured diagnostics and no stderr — fall back to the raw stdout
+    // tail so the user has *something* to look at.
+    parts.push(`Raw stdout tail:\n${rawOutput.slice(-1500)}`);
+  }
+
+  parts.push(
+    `Is '${cliPath}' installed and authenticated? Try running it once in a terminal.`,
+  );
+  return parts.join('\n\n');
 }
 
 /**
@@ -216,6 +267,19 @@ function handleStreamEvent(evt: any, opts: CliRunOptions, sinks: TextSinks): voi
 
   if (evt.type === 'system' && evt.subtype === 'init') {
     out?.(`◇ session ready (model: ${evt.model || 'default'})`);
+    return;
+  }
+
+  // The CLI emits api_retry events on stdout when the underlying request fails
+  // (SSL/proxy issues, transient network errors, auth refresh). Capture them so
+  // a final non-zero exit isn't a mystery.
+  if (evt.type === 'system' && evt.subtype === 'api_retry') {
+    const attempt = evt.attempt ?? '?';
+    const max = evt.max_retries ?? '?';
+    const reason = evt.error || evt.error_status || 'unknown';
+    const msg = `api_retry attempt=${attempt}/${max} reason=${reason}`;
+    sinks.addDiagnostic(msg);
+    out?.(`↻ ${msg}`);
     return;
   }
 
@@ -282,7 +346,10 @@ function handleStreamEvent(evt: any, opts: CliRunOptions, sinks: TextSinks): voi
     if (evt.subtype === 'success' && typeof evt.result === 'string') {
       sinks.setResult(evt.result);
     } else if (evt.subtype && evt.subtype !== 'success') {
-      out?.(`✗ result: ${evt.subtype}`);
+      const detail = evt.error || evt.message || evt.result || '';
+      const msg = detail ? `result ${evt.subtype}: ${truncate(String(detail), 400)}` : `result ${evt.subtype}`;
+      sinks.addDiagnostic(msg);
+      out?.(`✗ ${msg}`);
     }
   }
 }
