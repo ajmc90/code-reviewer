@@ -124,3 +124,44 @@ export interface ReviewOptions {
   passes: PassConfig;
   includeUntracked: boolean;
 }
+
+/**
+ * Persisted snapshot taken after each completed phase so a review can resume
+ * after a CLI failure (network/SSL/timeout) without re-collecting context,
+ * re-running the diff, or re-asking Claude for passes that already succeeded.
+ *
+ * Persisted in workspaceState; bump `version` when the shape changes so old
+ * snapshots are ignored on load.
+ */
+export interface PartialReviewFileEntry {
+  path: string;
+  content: string;
+  reason?: string;
+  truncated?: boolean;
+}
+
+export interface PartialReviewState {
+  version: 1;
+  opts: ReviewOptions;
+  ctx: ProjectContext;
+  conventions: string;
+  changedFiles: DiffFile[];
+  /** The original git diff text (possibly truncated by maxDiffBytes). */
+  rawDiff: string;
+  /** Files loaded into the prompt for context (changed-file contents + structural-pass additions). */
+  loadedFiles: PartialReviewFileEntry[];
+  /** Final string fed to focused passes (file context + raw diff). Rebuilt after structural augments loadedFiles. */
+  enrichedDiff: string;
+  structuralRisks: string[];
+  stat: { filesChanged: number; insertions: number; deletions: number };
+  truncated: boolean;
+  /** Passes that finished successfully — these are skipped on resume. */
+  completedPasses: string[];
+  /** Passes the user chose to skip after a failure — also skipped on resume. */
+  skippedPasses: string[];
+  /** All findings collected so far (pre-dedupe). */
+  findings: Finding[];
+  startedAt: number;
+  /** Human-readable reason the review stopped (last error, or 'cancelled'). */
+  pausedReason?: string;
+}

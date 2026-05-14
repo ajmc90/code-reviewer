@@ -18,8 +18,29 @@ import { parseClaudeOutput, dedupeFindings } from '../claude/parser';
 import { parseStructuralOutput } from '../claude/structuralParser';
 import { detectProjectContext, readConventions } from '../context/projectContext';
 import { loadFullFilesForDiff, loadRelatedFiles, detectUiFiles, charsForBudget, FileContextEntry } from '../context/fileContext';
-import { Finding, ReviewOptions, ReviewResult, ReviewSummary, DiffFile } from '../types';
-import { ReviewEventBus, PassName } from './events';
+import { Finding, PartialReviewState, ReviewOptions, ReviewResult, ReviewSummary, DiffFile } from '../types';
+import { PassFailureDecision, ReviewEventBus, PassName } from './events';
+
+/**
+ * Thrown when the user picked "Stop" on a pass-failure prompt. Carries the
+ * partial state so the extension can persist it and offer a Resume action.
+ */
+export class ReviewPausedError extends Error {
+  constructor(public readonly state: PartialReviewState) {
+    super('Review paused');
+    this.name = 'ReviewPausedError';
+  }
+}
+
+interface PlannedPass {
+  pass: PassName;
+  label: string;
+  increment: number;
+  condition: boolean;
+  replaceAll?: boolean;
+  /** Returns the findings for this pass (or [] if none). May throw on CLI failure. */
+  run: () => Promise<Finding[]>;
+}
 
 export interface OrchestratorDeps {
   git: GitService;
@@ -34,6 +55,27 @@ export interface OrchestratorDeps {
   contextFiles: string[];
   maxDiffBytes: number;
   events?: ReviewEventBus;
+  /**
+   * If provided, resume from this snapshot instead of collecting context/diff
+   * and re-running passes that already completed or were skipped.
+   */
+  resumeFrom?: PartialReviewState | null;
+  /**
+   * Called when a pass fails with a CLI error. Returning 'retry' loops the
+   * pass, 'skip' moves on to the next, 'stop' halts and surfaces partial state
+   * via ReviewPausedError. If omitted, defaults to 'stop'.
+   */
+  requestPassDecision?: (pass: PassName, error: string) => Promise<PassFailureDecision>;
+  /**
+   * Invoked after each completed/skipped pass with the latest partial state,
+   * so the host can persist it for resume.
+   */
+  onStateSnapshot?: (state: PartialReviewState) => void;
+  /**
+   * If set, only run these passes (others are not even attempted). Used for
+   * the per-step Retry affordance after the review stopped.
+   */
+  restrictToPasses?: PassName[];
 }
 
 export class ReviewOrchestrator {
@@ -41,9 +83,56 @@ export class ReviewOrchestrator {
 
   async review(opts: ReviewOptions): Promise<ReviewResult> {
     const start = Date.now();
-    const { git, cli, workspaceRoot, log, progress, token, events } = this.deps;
+    const { events } = this.deps;
 
     events?.emit({ kind: 'start', baseBranch: opts.baseBranch, headBranch: opts.headBranch, at: Date.now() });
+
+    const state: PartialReviewState = this.deps.resumeFrom
+      ? this.hydrateForResume(this.deps.resumeFrom)
+      : await this.bootstrapState(opts);
+
+    // Snapshot the freshly built state so even an immediate failure doesn't
+    // force re-collecting context on retry.
+    this.snapshot(state);
+
+    await this.runRemainingPasses(state);
+
+    this.report(this.deps.progress, 'Consolidating findings...', 5);
+    const deduped = dedupeFindings(state.findings);
+
+    this.report(this.deps.progress, 'Generating executive summary...', 5);
+    events?.emit({ kind: 'passStart', pass: 'summary', label: 'Final summary', at: Date.now() });
+    const summaryStart = Date.now();
+    const summary = await this.makeSummary(state.opts, state.ctx, state.stat, deduped);
+    events?.emit({ kind: 'passDone', pass: 'summary', findingCount: 0, durationMs: Date.now() - summaryStart, at: Date.now() });
+
+    const result: ReviewResult = {
+      summary: {
+        ...summary,
+        branch: state.opts.headBranch,
+        baseBranch: state.opts.baseBranch,
+        filesChanged: state.stat.filesChanged,
+        linesAdded: state.stat.insertions,
+        linesRemoved: state.stat.deletions,
+      },
+      findings: deduped,
+      passesRun: [...state.completedPasses],
+      durationMs: Date.now() - start,
+    };
+    events?.emit({
+      kind: 'done',
+      verdict: result.summary.overallVerdict,
+      durationMs: result.durationMs,
+      findingCount: deduped.length,
+      at: Date.now(),
+    });
+    return result;
+  }
+
+  // ─── State construction ───────────────────────────────────────────
+
+  private async bootstrapState(opts: ReviewOptions): Promise<PartialReviewState> {
+    const { git, workspaceRoot, log, progress, events } = this.deps;
 
     this.report(progress, 'Detecting project context...', 2);
     const ctx = await detectProjectContext(workspaceRoot);
@@ -87,224 +176,339 @@ export class ReviewOrchestrator {
       at: Date.now(),
     });
 
-    const passes: string[] = [];
-    const passFindings: Finding[] = [];
-
-    // ─── Build extra file context (always) ──────────────────────────
-    // Pull full HEAD content of changed files into the prompt so reviewers
-    // see the surrounding code, not just the hunk. Token budget is generous;
-    // file-context loader truncates by file size, prioritizing small files.
-    const totalBudgetChars = charsForBudget(60000); // ~240KB across all extra context
+    // Always-on file context for changed files.
+    const totalBudgetChars = charsForBudget(60000);
     const diffBudgetReserved = Math.min(rawDiff.length, charsForBudget(40000));
     const contextBudget = Math.max(0, totalBudgetChars - diffBudgetReserved);
     let loadedFiles: FileContextEntry[] = [];
     if (contextBudget > 5000) {
-      const loaded = loadFullFilesForDiff({
-        workspaceRoot,
-        changedFiles,
-        budgetChars: contextBudget,
-        perFileMaxChars: 40000,
-      });
+      const loaded = loadFullFilesForDiff({ workspaceRoot, changedFiles, budgetChars: contextBudget, perFileMaxChars: 40000 });
       loadedFiles = loaded.entries;
       log(`Loaded ${loadedFiles.length} changed-file contents (~${loadedFiles.reduce((a, f) => a + f.content.length, 0)} chars).`);
     }
 
-    // ─── Structural exploration pass (optional) ─────────────────────
-    let structuralRisks: string[] = [];
-    if (opts.passes.structural) {
-      this.report(progress, 'Pass 0 — Structural exploration…', 8);
-      this.checkCancel(token);
-      events?.emit({ kind: 'passStart', pass: 'structural', label: 'Pass 0 — Structural exploration', at: Date.now() });
-      const passStart = Date.now();
-      try {
-        const prompt = buildStructuralExplorationPrompt({ ctx, diff: rawDiff, changedFiles, conventions });
-        const text = await this.runCliWithTools(prompt, 'structural', ['Read', 'Grep', 'Glob']);
-        const exploration = parseStructuralOutput(text);
-        structuralRisks = exploration.observedRisks;
-        log(`Structural pass: ${exploration.filesToInclude.length} extra files requested, ${exploration.observedRisks.length} risks observed.`);
-
-        // Load the requested related files into the remaining context budget
-        const remainingChars = Math.max(0, contextBudget - loadedFiles.reduce((a, f) => a + f.content.length, 0));
-        const existingPaths = new Set(loadedFiles.map((f) => f.path));
-        const related = loadRelatedFiles({
-          workspaceRoot,
-          requested: exploration.filesToInclude,
-          existingPaths,
-          budgetChars: remainingChars,
-          perFileMaxChars: 30000,
-        });
-        loadedFiles.push(...related);
-        log(`Structural pass added ${related.length} related files.`);
-
-        passes.push('structural');
-        events?.emit({ kind: 'passDone', pass: 'structural', findingCount: 0, durationMs: Date.now() - passStart, at: Date.now() });
-      } catch (e: any) {
-        events?.emit({ kind: 'passError', pass: 'structural', error: e?.message ?? String(e), at: Date.now() });
-        // structural is best-effort — don't fail the whole review on it
-        log(`Structural pass failed (continuing without it): ${e?.message ?? e}`);
-      }
-    }
-
-    // Build the enriched diff that every focused pass sees: file context + raw diff
-    const contextSection = buildContextSection(loadedFiles);
-    const enrichedDiff = contextSection ? `${contextSection}\n\n--- UNIFIED DIFF (base...head) ---\n${rawDiff}` : rawDiff;
+    const enrichedDiff = this.buildEnrichedDiff(loadedFiles, rawDiff);
     log(`Enriched prompt context: ${loadedFiles.length} files, ${enrichedDiff.length} total chars.`);
 
-    const runPass = async (
-      pass: PassName,
-      label: string,
-      increment: number,
-      buildPrompt: () => string,
-      tag: Finding['pass'],
-      replaceAll = false,
-    ) => {
+    return {
+      version: 1,
+      opts,
+      ctx,
+      conventions,
+      changedFiles,
+      rawDiff,
+      loadedFiles,
+      enrichedDiff,
+      structuralRisks: [],
+      stat,
+      truncated,
+      completedPasses: [],
+      skippedPasses: [],
+      findings: [],
+      startedAt: Date.now(),
+    };
+  }
+
+  private hydrateForResume(prev: PartialReviewState): PartialReviewState {
+    const { events, log } = this.deps;
+    events?.emit({
+      kind: 'context',
+      languages: prev.ctx.language,
+      frameworks: prev.ctx.frameworks,
+      testFrameworks: prev.ctx.testFrameworks,
+      conventions: prev.ctx.conventionsFiles,
+      at: Date.now(),
+    });
+    events?.emit({
+      kind: 'diff',
+      filesChanged: prev.changedFiles.length,
+      additions: prev.stat.insertions,
+      deletions: prev.stat.deletions,
+      truncated: prev.truncated,
+      at: Date.now(),
+    });
+    for (const p of prev.completedPasses) {
+      const findingCount = prev.findings.filter((f) => f.pass === p).length;
+      events?.emit({ kind: 'passDone', pass: p as PassName, findingCount, durationMs: 0, at: Date.now() });
+    }
+    // Re-emit findings so the panel rehydrates its right-side list. Without
+    // this the user only sees a count in the timeline; the findings grid would
+    // stay empty until the resume runs to completion.
+    for (const f of prev.findings) {
+      events?.emit({ kind: 'findingAdded', finding: f, at: Date.now() });
+    }
+    log(`Resuming review: ${prev.completedPasses.length} passes complete, ${prev.skippedPasses.length} skipped, ${prev.findings.length} findings so far.`);
+    // Shallow clone so mutations don't leak back to the saved snapshot.
+    return {
+      ...prev,
+      changedFiles: [...prev.changedFiles],
+      loadedFiles: [...prev.loadedFiles],
+      completedPasses: [...prev.completedPasses],
+      skippedPasses: [...prev.skippedPasses],
+      structuralRisks: [...prev.structuralRisks],
+      findings: [...prev.findings],
+      pausedReason: undefined,
+    };
+  }
+
+  private buildEnrichedDiff(loadedFiles: FileContextEntry[], rawDiff: string): string {
+    const contextSection = buildContextSection(loadedFiles);
+    return contextSection ? `${contextSection}\n\n--- UNIFIED DIFF (base...head) ---\n${rawDiff}` : rawDiff;
+  }
+
+  private snapshot(state: PartialReviewState): void {
+    this.deps.onStateSnapshot?.(state);
+  }
+
+  // ─── Pass loop ────────────────────────────────────────────────────
+
+  private async runRemainingPasses(state: PartialReviewState): Promise<void> {
+    if (state.opts.passes.structural && this.shouldRun('structural', state)) {
+      await this.executePassWithDecisions('structural', 'Pass 0 — Structural exploration', 8, state, async () => {
+        return await this.runStructuralPass(state);
+      });
+    }
+
+    const planned: PlannedPass[] = [
+      {
+        pass: 'explore',
+        label: 'Pass 1 — Exploration',
+        increment: 10,
+        condition: state.opts.passes.explore,
+        run: () =>
+          this.runFocusedPass('explore', () =>
+            buildExplorePrompt({
+              ctx: state.ctx,
+              depth: state.opts.depth,
+              baseBranch: state.opts.baseBranch,
+              headBranch: state.opts.headBranch,
+              diff: state.enrichedDiff,
+              conventions: state.conventions,
+              changedFiles: state.changedFiles,
+              extraContext: '',
+              structuralRisks: state.structuralRisks,
+            }),
+          'explore'),
+      },
+      {
+        pass: 'security',
+        label: 'Pass — Security',
+        increment: 12,
+        condition: state.opts.passes.security,
+        run: () => this.runFocusedPass('security', () => buildSecurityPrompt({ ctx: state.ctx, diff: state.enrichedDiff }), 'security'),
+      },
+      {
+        pass: 'performance',
+        label: 'Pass — Performance',
+        increment: 12,
+        condition: state.opts.passes.performance,
+        run: () => this.runFocusedPass('performance', () => buildPerformancePrompt({ ctx: state.ctx, diff: state.enrichedDiff }), 'performance'),
+      },
+      {
+        pass: 'accessibility',
+        label: 'Pass — Accessibility',
+        increment: 10,
+        condition: state.opts.passes.accessibility && detectUiFiles(state.changedFiles).length > 0,
+        run: () =>
+          this.runFocusedPass(
+            'accessibility',
+            () => buildAccessibilityPrompt({ ctx: state.ctx, diff: state.enrichedDiff, uiFiles: detectUiFiles(state.changedFiles) }),
+            'accessibility',
+          ),
+      },
+      {
+        pass: 'tests',
+        label: 'Pass — Tests',
+        increment: 10,
+        condition: state.opts.passes.tests,
+        run: () => this.runFocusedPass('tests', () => buildTestsPrompt({ ctx: state.ctx, diff: state.enrichedDiff }), 'tests'),
+      },
+      {
+        pass: 'gaps',
+        label: 'Pass — Gaps (missing pieces)',
+        increment: 10,
+        condition: state.opts.passes.gaps,
+        run: () =>
+          this.runFocusedPass(
+            'gaps',
+            () => buildGapsPrompt({ ctx: state.ctx, diff: state.enrichedDiff, conventions: state.conventions, changedFiles: state.changedFiles }),
+            'gaps',
+          ),
+      },
+      {
+        pass: 'permute',
+        label: 'Pass — Permutation / Alternatives',
+        increment: 10,
+        condition: state.opts.passes.permute && (state.opts.depth === 'deep' || state.opts.depth === 'obsessive'),
+        run: () =>
+          this.runFocusedPass(
+            'permute',
+            () => buildPermutePrompt({ ctx: state.ctx, depth: state.opts.depth, diff: state.enrichedDiff }),
+            'permute',
+          ),
+      },
+      {
+        pass: 'critique',
+        label: 'Pass — Self-critique',
+        increment: 8,
+        condition: state.opts.passes.critique,
+        replaceAll: true,
+        run: () =>
+          this.runFocusedPass(
+            'critique',
+            () =>
+              buildCritiquePrompt({
+                ctx: state.ctx,
+                depth: state.opts.depth,
+                priorFindingsJson: JSON.stringify(state.findings.map(stripIdForPrompt)),
+                diff: state.enrichedDiff,
+              }),
+            'critique',
+          ),
+      },
+    ];
+
+    for (const step of planned) {
+      if (!step.condition) continue;
+      if (!this.shouldRun(step.pass, state)) continue;
+      await this.executePassWithDecisions(step.pass, step.label, step.increment, state, async () => {
+        const findings = await step.run();
+        if (step.replaceAll && findings.length > 0) {
+          state.findings.splice(0, state.findings.length, ...findings);
+        } else {
+          state.findings.push(...findings);
+        }
+        for (const f of findings) this.deps.events?.emit({ kind: 'findingAdded', finding: f, at: Date.now() });
+        return findings.length;
+      });
+    }
+  }
+
+  private shouldRun(pass: PassName, state: PartialReviewState): boolean {
+    if (this.deps.restrictToPasses && !this.deps.restrictToPasses.includes(pass)) return false;
+    if (state.completedPasses.includes(pass)) return false;
+    if (state.skippedPasses.includes(pass)) return false;
+    return true;
+  }
+
+  /**
+   * Run one pass with retry/skip/stop semantics. On stop, throws
+   * ReviewPausedError so the host can persist the partial state and offer
+   * a Resume affordance. The `run` callback does the work and is responsible
+   * for mutating `state` (appending findings, etc.); it returns the number of
+   * findings for the passDone event.
+   */
+  private async executePassWithDecisions(
+    pass: PassName,
+    label: string,
+    increment: number,
+    state: PartialReviewState,
+    run: () => Promise<number>,
+  ): Promise<void> {
+    const { events, token, progress, log } = this.deps;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
       this.report(progress, label, increment);
       this.checkCancel(token);
       events?.emit({ kind: 'passStart', pass, label, at: Date.now() });
       const passStart = Date.now();
-      const prompt = buildPrompt();
-      log(`[${pass}] prompt = ${prompt.length} chars (${Math.round(prompt.length / 1024)} KB)`);
       try {
-        const text = await this.runCli(prompt, pass);
-        log(`[${pass}] response = ${text.length} chars (${Math.round(text.length / 1024)} KB)`);
-        const parsed = parseClaudeOutput(text);
-        if (parsed.findings.length === 0 && text.length > 0) {
-          // No findings but Claude DID respond — likely a parse problem or
-          // an honest "nothing to flag" answer. Show the first 600 chars of
-          // the raw response so the user can tell which.
-          const preview = text.trim().slice(0, 600).replace(/\s+/g, ' ');
-          log(`[${pass}] parsed 0 findings. Response preview: ${preview}${text.length > 600 ? '…' : ''}`);
-          events?.emit({
-            kind: 'log',
-            level: 'warn',
-            message: `[${pass}] parsed 0 findings. First 200 chars: ${preview.slice(0, 200)}`,
-            at: Date.now(),
-          });
-        }
-        tagPass(parsed.findings, tag);
-        if (replaceAll && parsed.findings.length > 0) {
-          passFindings.splice(0, passFindings.length, ...parsed.findings);
-        } else {
-          passFindings.push(...parsed.findings);
-        }
-        for (const f of parsed.findings) {
-          events?.emit({ kind: 'findingAdded', finding: f, at: Date.now() });
-        }
-        passes.push(pass);
-        events?.emit({ kind: 'passDone', pass, findingCount: parsed.findings.length, durationMs: Date.now() - passStart, at: Date.now() });
-        log(`${label} produced ${parsed.findings.length} findings (${Date.now() - passStart}ms).`);
+        const findingCount = await run();
+        state.completedPasses.push(pass);
+        this.snapshot(state);
+        events?.emit({ kind: 'passDone', pass, findingCount, durationMs: Date.now() - passStart, at: Date.now() });
+        return;
       } catch (e: any) {
-        events?.emit({ kind: 'passError', pass, error: e?.message ?? String(e), at: Date.now() });
-        throw e;
+        if (token?.isCancellationRequested) throw e;
+        const errMsg = e?.message ?? String(e);
+        log(`[${pass}] failed: ${errMsg}`);
+        events?.emit({ kind: 'passError', pass, error: errMsg, at: Date.now() });
+
+        const decide = this.deps.requestPassDecision;
+        const decision: PassFailureDecision = decide ? await decide(pass, errMsg) : 'stop';
+        events?.emit({ kind: 'passDecisionMade', pass, decision, at: Date.now() });
+
+        if (decision === 'retry') {
+          log(`[${pass}] retrying after user decision`);
+          continue;
+        }
+        if (decision === 'skip') {
+          state.skippedPasses.push(pass);
+          this.snapshot(state);
+          log(`[${pass}] skipped after user decision`);
+          return;
+        }
+        // stop
+        state.pausedReason = `${pass}: ${errMsg}`;
+        this.snapshot(state);
+        events?.emit({
+          kind: 'paused',
+          reason: state.pausedReason,
+          completedPasses: [...state.completedPasses],
+          skippedPasses: [...state.skippedPasses],
+          findingCount: state.findings.length,
+          at: Date.now(),
+        });
+        throw new ReviewPausedError(state);
       }
-    };
+    }
+  }
 
-    if (opts.passes.explore) {
-      await runPass(
-        'explore',
-        'Pass 1 — Exploration',
-        10,
-        () =>
-          buildExplorePrompt({
-            ctx,
-            depth: opts.depth,
-            baseBranch: opts.baseBranch,
-            headBranch: opts.headBranch,
-            diff: enrichedDiff,
-            conventions,
-            changedFiles,
-            extraContext: '', // already in enrichedDiff
-            structuralRisks,
-          }),
-        'explore',
-      );
-    }
-    if (opts.passes.security) {
-      await runPass('security', 'Pass — Security', 12, () => buildSecurityPrompt({ ctx, diff: enrichedDiff }), 'security');
-    }
-    if (opts.passes.performance) {
-      await runPass('performance', 'Pass — Performance', 12, () => buildPerformancePrompt({ ctx, diff: enrichedDiff }), 'performance');
-    }
-    const uiFiles = detectUiFiles(changedFiles);
-    if (opts.passes.accessibility && uiFiles.length > 0) {
-      await runPass(
-        'accessibility',
-        'Pass — Accessibility',
-        10,
-        () => buildAccessibilityPrompt({ ctx, diff: enrichedDiff, uiFiles }),
-        'accessibility',
-      );
-    } else if (opts.passes.accessibility) {
-      log('Accessibility pass skipped: no UI/CSS files in the diff.');
-    }
-    if (opts.passes.tests) {
-      await runPass('tests', 'Pass — Tests', 10, () => buildTestsPrompt({ ctx, diff: enrichedDiff }), 'tests');
-    }
-    if (opts.passes.gaps) {
-      await runPass(
-        'gaps',
-        'Pass — Gaps (missing pieces)',
-        10,
-        () => buildGapsPrompt({ ctx, diff: enrichedDiff, conventions, changedFiles }),
-        'gaps',
-      );
-    }
-    if (opts.passes.permute && (opts.depth === 'deep' || opts.depth === 'obsessive')) {
-      await runPass(
-        'permute',
-        'Pass — Permutation / Alternatives',
-        10,
-        () => buildPermutePrompt({ ctx, depth: opts.depth, diff: enrichedDiff }),
-        'permute',
-      );
-    }
-    if (opts.passes.critique) {
-      await runPass(
-        'critique',
-        'Pass — Self-critique',
-        8,
-        () =>
-          buildCritiquePrompt({
-            ctx,
-            depth: opts.depth,
-            priorFindingsJson: JSON.stringify(passFindings.map(stripIdForPrompt)),
-            diff: enrichedDiff,
-          }),
-        'critique',
-        true,
-      );
-    }
-
-    this.report(progress, 'Consolidating findings...', 5);
-    const deduped = dedupeFindings(passFindings);
-
-    this.report(progress, 'Generating executive summary...', 5);
-    events?.emit({ kind: 'passStart', pass: 'summary', label: 'Final summary', at: Date.now() });
-    const summaryStart = Date.now();
-    const summary = await this.makeSummary(opts, ctx, stat, deduped);
-    events?.emit({ kind: 'passDone', pass: 'summary', findingCount: 0, durationMs: Date.now() - summaryStart, at: Date.now() });
-
-    const result: ReviewResult = {
-      summary: {
-        ...summary,
-        branch: opts.headBranch,
-        baseBranch: opts.baseBranch,
-        filesChanged: stat.filesChanged,
-        linesAdded: stat.insertions,
-        linesRemoved: stat.deletions,
-      },
-      findings: deduped,
-      passesRun: passes,
-      durationMs: Date.now() - start,
-    };
-    events?.emit({
-      kind: 'done',
-      verdict: result.summary.overallVerdict,
-      durationMs: result.durationMs,
-      findingCount: deduped.length,
-      at: Date.now(),
+  private async runStructuralPass(state: PartialReviewState): Promise<number> {
+    const { log, workspaceRoot } = this.deps;
+    const prompt = buildStructuralExplorationPrompt({
+      ctx: state.ctx,
+      diff: state.rawDiff,
+      changedFiles: state.changedFiles,
+      conventions: state.conventions,
     });
-    return result;
+    const text = await this.runCliWithTools(prompt, 'structural', ['Read', 'Grep', 'Glob']);
+    const exploration = parseStructuralOutput(text);
+    state.structuralRisks = exploration.observedRisks;
+    log(`Structural pass: ${exploration.filesToInclude.length} extra files requested, ${exploration.observedRisks.length} risks observed.`);
+
+    const usedBudget = state.loadedFiles.reduce((a, f) => a + f.content.length, 0);
+    const totalBudgetChars = charsForBudget(60000);
+    const diffBudgetReserved = Math.min(state.rawDiff.length, charsForBudget(40000));
+    const contextBudget = Math.max(0, totalBudgetChars - diffBudgetReserved);
+    const remainingChars = Math.max(0, contextBudget - usedBudget);
+    const existingPaths = new Set(state.loadedFiles.map((f) => f.path));
+    const related = loadRelatedFiles({
+      workspaceRoot,
+      requested: exploration.filesToInclude,
+      existingPaths,
+      budgetChars: remainingChars,
+      perFileMaxChars: 30000,
+    });
+    state.loadedFiles.push(...related);
+    log(`Structural pass added ${related.length} related files.`);
+    state.enrichedDiff = this.buildEnrichedDiff(state.loadedFiles, state.rawDiff);
+    return 0;
+  }
+
+  private async runFocusedPass(
+    pass: PassName,
+    buildPrompt: () => string,
+    tag: Finding['pass'],
+  ): Promise<Finding[]> {
+    const { log, events } = this.deps;
+    const prompt = buildPrompt();
+    log(`[${pass}] prompt = ${prompt.length} chars (${Math.round(prompt.length / 1024)} KB)`);
+    const text = await this.runCli(prompt, pass);
+    log(`[${pass}] response = ${text.length} chars (${Math.round(text.length / 1024)} KB)`);
+    const parsed = parseClaudeOutput(text);
+    if (parsed.findings.length === 0 && text.length > 0) {
+      const preview = text.trim().slice(0, 600).replace(/\s+/g, ' ');
+      log(`[${pass}] parsed 0 findings. Response preview: ${preview}${text.length > 600 ? '…' : ''}`);
+      events?.emit({
+        kind: 'log',
+        level: 'warn',
+        message: `[${pass}] parsed 0 findings. First 200 chars: ${preview.slice(0, 200)}`,
+        at: Date.now(),
+      });
+    }
+    tagPass(parsed.findings, tag);
+    return parsed.findings;
   }
 
   private async makeSummary(

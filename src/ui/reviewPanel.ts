@@ -1,13 +1,33 @@
 import * as vscode from 'vscode';
 import { Finding, PassConfig, ReviewResult, Severity } from '../types';
-import { ReviewEvent, ReviewEventBus } from '../core/events';
+import { PassFailureDecision, PassName, ReviewEvent, ReviewEventBus } from '../core/events';
 import { BranchInfo, GitService } from '../git/gitService';
 import { looksLikeSshAuthError, unlockSshKeyInteractive } from '../git/sshAuth';
+
+/**
+ * Lightweight view of the persisted PartialReviewState. The webview needs to
+ * know what was completed / skipped / pending, but doesn't need the full diff
+ * or file contents the orchestrator keeps in workspaceState.
+ */
+export interface PartialReviewSummary {
+  baseBranch: string;
+  headBranch: string;
+  completedPasses: string[];
+  skippedPasses: string[];
+  findingCount: number;
+  pausedReason?: string;
+  startedAt: number;
+}
 
 export interface ReviewPanelDeps {
   getGit: () => GitService | null;
   startReview: (base: string, head: string, passes?: Partial<PassConfig>) => Promise<void>;
   cancelReview: () => void;
+  getPartialSummary: () => PartialReviewSummary | null;
+  submitPassDecision: (pass: PassName, decision: PassFailureDecision) => void;
+  resumeReview: () => void;
+  retryPass: (pass: PassName) => void;
+  discardPartial: () => void;
 }
 
 /**
@@ -69,7 +89,16 @@ export class ReviewPanel {
         if (msg?.type === 'ready') {
           for (const e of bus.snapshot()) this.post({ type: 'event', event: e });
           if (this.result) this.post({ type: 'result', result: this.result });
+          this.post({ type: 'partialSummary', summary: this.deps.getPartialSummary() });
           await this.refreshBranches();
+        } else if (msg?.type === 'passDecision' && msg.pass && msg.decision) {
+          this.deps.submitPassDecision(msg.pass as PassName, msg.decision as PassFailureDecision);
+        } else if (msg?.type === 'resumeReview') {
+          this.deps.resumeReview();
+        } else if (msg?.type === 'retryPass' && msg.pass) {
+          this.deps.retryPass(msg.pass as PassName);
+        } else if (msg?.type === 'discardPartial') {
+          this.deps.discardPartial();
         } else if (msg?.type === 'open' && msg.id) {
           vscode.commands.executeCommand('claudeReviewer.openFinding', msg.id);
         } else if (msg?.type === 'applyFix' && msg.id) {
@@ -163,6 +192,10 @@ export class ReviewPanel {
   setResult(result: ReviewResult | null) {
     this.result = result;
     this.post({ type: 'result', result });
+  }
+
+  setPartialSummary(summary: PartialReviewSummary | null) {
+    this.post({ type: 'partialSummary', summary });
   }
 
   dispose() {
@@ -769,7 +802,49 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 .step.running .ico{ background: var(--accent); color: var(--accent-fg); animation: spin 1.4s linear infinite }
 .step.done .ico{ background: var(--sev-nit); color: #0a2e1c }
 .step.error .ico{ background: var(--sev-critical); color: #fff }
+.step.awaitDecision{ border-color: color-mix(in srgb, var(--sev-major) 55%, transparent); background: color-mix(in srgb, var(--sev-major) 10%, transparent) }
+.step.awaitDecision .ico{ background: var(--sev-major); color: #1a1100 }
+.step.skipped .ico{ background: color-mix(in srgb, var(--fg) 22%, transparent); color: var(--fg-muted) }
+.step.skipped .label{ color: var(--fg-muted); text-decoration: line-through }
 @keyframes spin{ from{ transform:rotate(0) } to{ transform:rotate(360deg) } }
+
+.step .actions{
+  display:flex; gap: var(--s-2); margin-top: 6px; flex-wrap: wrap;
+}
+.step .actions button{
+  display:inline-flex; align-items:center; gap: 4px;
+  padding: 3px var(--s-2);
+  font: inherit; font-size: var(--t-xs); font-weight: 500;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.step .actions button:hover{ background: color-mix(in srgb, var(--fg) 6%, transparent) }
+.step .actions button.primary{ background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight:600 }
+.step .actions button.primary:hover{ background: var(--accent-hover) }
+.step .actions button.danger{ background: var(--vscode-errorForeground, #d13438); color: #fff; border-color: transparent; font-weight:600 }
+.step .actions button.danger:hover{ filter: brightness(1.1) }
+
+.resume-banner{
+  display: none;
+  margin: 0 0 var(--s-2);
+  padding: var(--s-3);
+  background: color-mix(in srgb, var(--sev-major) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sev-major) 35%, transparent);
+  border-radius: var(--r-md);
+  gap: var(--s-3);
+  align-items: flex-start;
+}
+.resume-banner[data-visible="1"]{ display: flex }
+.resume-banner .text{ flex:1 1 auto; min-width:0 }
+.resume-banner .text h3{ margin: 0 0 4px; font-size: var(--t-sm); color: var(--fg); font-weight: 600 }
+.resume-banner .text p{ margin: 0; color: var(--fg-muted); font-size: var(--t-xs); overflow-wrap: anywhere; line-height: var(--lh-normal) }
+.resume-banner .actions{ display: flex; gap: var(--s-2); flex-shrink: 0 }
+.resume-banner .ico{
+  font-size: 18px; line-height: 1; padding-top: 1px; color: var(--sev-major);
+}
 
 .step .body{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px }
 .step .label{
@@ -1184,6 +1259,18 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 
       <div class="left-full">
 
+        <div class="resume-banner" id="resume-banner" role="alert">
+          <span class="ico" aria-hidden="true">⏸</span>
+          <div class="text">
+            <h3 id="resume-banner-title">Paused review available</h3>
+            <p id="resume-banner-detail"></p>
+          </div>
+          <div class="actions">
+            <button class="primary" type="button" id="btn-resume">Resume</button>
+            <button type="button" id="btn-discard-partial" title="Throw away the partial review">Discard</button>
+          </div>
+        </div>
+
         <section class="section" aria-labelledby="branch-picker-title">
           <h2 class="section-title" id="branch-picker-title">Branch picker</h2>
           <div class="picker" role="group" aria-label="Choose base and head branches">
@@ -1340,6 +1427,8 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     leftCollapsed: !!persisted.leftCollapsed,
     leftWidth: clampLeftWidth(persisted.leftWidth) || 420,
     runningPass: null,
+    // Most recent partial-state summary from the host. null = no paused review.
+    partial: null,
   };
 
   function clampLeftWidth(n){
@@ -1525,6 +1614,13 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   }
 
   // ─── timeline ────────────────────────────────────────────────
+  // Steps shown here are non-orchestrator-pass entries (context, diff) plus
+  // each pass. Status drives the visuals and which action buttons we render:
+  //   running        → spinner
+  //   done           → check
+  //   error          → warning + (if review stopped) inline Retry button
+  //   awaitDecision  → warning + Retry/Skip/Stop buttons (orchestrator paused)
+  //   skipped        → muted, strike-through + Retry button when review stopped
   function renderTimeline(){
     const root = $('#timeline'); root.innerHTML='';
     if (state.steps.size === 0){
@@ -1536,7 +1632,13 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       const div = document.createElement('div');
       div.className = 'step ' + info.status;
       div.setAttribute('role', 'listitem');
-      const icon = info.status==='running' ? '◐' : info.status==='done' ? '✓' : info.status==='error' ? '⚠' : '·';
+      const icon =
+        info.status==='running' ? '◐'
+        : info.status==='done' ? '✓'
+        : info.status==='error' ? '⚠'
+        : info.status==='awaitDecision' ? '⚠'
+        : info.status==='skipped' ? '–'
+        : '·';
       const label = PASS_LABEL[pass] || pass;
       let elapsed = '';
       if (info.startedAt){
@@ -1546,16 +1648,73 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       const activity = info.lastActivity
         ? '<div class="activity" title="'+escAttr(info.lastActivity)+'">'+esc(info.lastActivity)+'</div>'
         : '';
+      const actions = renderStepActions(pass, info);
       div.innerHTML =
         '<div class="ico" aria-hidden="true">'+ icon +'</div>' +
         '<div class="body">' +
           '<div class="label"><span>'+esc(label)+'</span><span class="elapsed">'+esc(elapsed)+'</span></div>' +
           '<div class="meta">'+esc(info.detail || (info.status==='running' ? 'Working…' : ''))+'</div>' +
           activity +
+          actions +
         '</div>';
       root.appendChild(div);
     }
     if (state.leftCollapsed) renderRail();
+  }
+
+  // Real pass names that can be retried/skipped/stopped. 'context' and 'diff'
+  // are bootstrap stages, not Claude passes — they don't get action buttons.
+  const ACTIONABLE_PASSES = new Set(['structural','explore','security','performance','accessibility','tests','gaps','permute','critique']);
+
+  function renderResumeBanner(){
+    const el = $('#resume-banner');
+    if (!el) return;
+    if (!state.partial || state.isRunning){
+      el.removeAttribute('data-visible');
+      return;
+    }
+    const p = state.partial;
+    const remaining = totalPassCount() - p.completedPasses.length - p.skippedPasses.length;
+    $('#resume-banner-title').textContent =
+      'Paused review of ' + p.headBranch + ' vs ' + p.baseBranch;
+    const reason = p.pausedReason ? p.pausedReason : 'review was stopped';
+    const summary = p.completedPasses.length + ' completed · '
+      + p.skippedPasses.length + ' skipped · '
+      + Math.max(0, remaining) + ' pending · '
+      + p.findingCount + ' findings so far';
+    $('#resume-banner-detail').textContent = summary + ' — ' + reason;
+    el.setAttribute('data-visible', '1');
+  }
+
+  function totalPassCount(){
+    // Count active passes per the current opts.passes selection. We treat
+    // anything the user toggled on as a "planned" pass for the % math.
+    let n = 0;
+    for (const k of Object.keys(state.passes)) if (state.passes[k]) n++;
+    return n;
+  }
+
+  function renderStepActions(pass, info){
+    if (!ACTIONABLE_PASSES.has(pass)) return '';
+    if (info.status === 'awaitDecision'){
+      // Orchestrator is parked waiting for our verdict.
+      return ''
+        + '<div class="actions" role="group" aria-label="Decide what to do with the failed pass">'
+        +   '<button class="primary" type="button" data-decision="retry" data-pass="'+escAttr(pass)+'">↻ Retry</button>'
+        +   '<button type="button" data-decision="skip" data-pass="'+escAttr(pass)+'">⤼ Skip</button>'
+        +   '<button class="danger" type="button" data-decision="stop" data-pass="'+escAttr(pass)+'">■ Stop</button>'
+        + '</div>';
+    }
+    // After the review halted, offer per-step Retry on anything that didn't
+    // finish cleanly. Hidden while another review is running so we don't queue
+    // a second job.
+    if (!state.isRunning && state.partial && (info.status === 'error' || info.status === 'skipped')){
+      return ''
+        + '<div class="actions">'
+        +   '<button class="primary" type="button" data-retry-pass="'+escAttr(pass)+'">↻ Retry this pass</button>'
+        + '</div>';
+    }
+    return '';
   }
 
   // ─── log ─────────────────────────────────────────────────────
@@ -1702,24 +1861,28 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   }
 
   // ─── delegated event handlers ────────────────────────────────
+  // Note: we widen to Element (not HTMLElement) so clicks inside <svg> — like
+  // the chevron used to expand a finding — still hit the .closest() lookups.
+  // SVGElement extends Element but NOT HTMLElement, which would otherwise
+  // make the chevron uniquely unclickable.
   document.addEventListener('click', (ev)=>{
     const t = ev.target;
-    if (!(t instanceof HTMLElement)) return;
+    if (!(t instanceof Element)) return;
 
-    if (t.matches('.filter')){
+    if (t instanceof HTMLElement && t.matches('.filter')){
       state.filter = t.dataset.f;
       $$('.filter').forEach(b => b.setAttribute('aria-pressed', b === t ? 'true' : 'false'));
       renderFindings();
       return;
     }
     const opener = t.closest('[data-open]');
-    if (opener){
+    if (opener instanceof HTMLElement){
       vscode.postMessage({type:'open', id: opener.dataset.open});
       ev.stopPropagation();
       return;
     }
     const actEl = t.closest('[data-act]');
-    if (actEl && actEl.dataset.id){
+    if (actEl instanceof HTMLElement && actEl.dataset.id){
       const act = actEl.dataset.act;
       const type = act === 'apply' ? 'applyFix' : act === 'ask' ? 'askFollowUp' : act === 'dismiss' ? 'dismiss' : 'open';
       vscode.postMessage({type, id: actEl.dataset.id});
@@ -1729,8 +1892,8 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     const head = t.closest('.finding-head');
     if (head){
       const card = head.closest('.finding');
-      const expanded = card.getAttribute('aria-expanded') === 'true';
-      card.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+      const expanded = card && card.getAttribute('aria-expanded') === 'true';
+      if (card) card.setAttribute('aria-expanded', expanded ? 'false' : 'true');
     }
   });
 
@@ -1995,6 +2158,41 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       passes: Object.assign({}, state.passes),
     });
   });
+  $('#btn-resume').addEventListener('click', () => {
+    if (!state.partial || state.isRunning) return;
+    vscode.postMessage({type:'resumeReview'});
+  });
+  $('#btn-discard-partial').addEventListener('click', () => {
+    if (!state.partial || state.isRunning) return;
+    vscode.postMessage({type:'discardPartial'});
+  });
+  // Timeline buttons are rendered dynamically, so we delegate to the container.
+  $('#timeline').addEventListener('click', (ev) => {
+    const t = ev.target;
+    if (!(t instanceof HTMLElement)) return;
+    const decisionBtn = t.closest('button[data-decision]');
+    if (decisionBtn){
+      const pass = decisionBtn.getAttribute('data-pass');
+      const decision = decisionBtn.getAttribute('data-decision');
+      if (pass && decision){
+        // Disable the whole action row immediately so the user can't double-click
+        // a different decision while the message is in flight.
+        const row = decisionBtn.closest('.actions');
+        if (row) row.querySelectorAll('button').forEach((b) => b.setAttribute('disabled','true'));
+        vscode.postMessage({type:'passDecision', pass, decision});
+      }
+      return;
+    }
+    const retryBtn = t.closest('button[data-retry-pass]');
+    if (retryBtn){
+      const pass = retryBtn.getAttribute('data-retry-pass');
+      if (pass){
+        retryBtn.setAttribute('disabled','true');
+        retryBtn.textContent = '↻ Retrying…';
+        vscode.postMessage({type:'retryPass', pass});
+      }
+    }
+  });
   $('#btn-clear-log').addEventListener('click', clearLive);
   $('#btn-copy-log').addEventListener('click', () => {
     const live = $('#live');
@@ -2016,7 +2214,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       $('#verdict').dataset.v = 'running'; $('#verdict').textContent = 'RUNNING';
       state.findings = []; state.steps.clear(); state.result = null; state.isRunning = true;
       $('#exec').hidden = true; $('#bullets').hidden = true;
-      bumpCounter(); renderFindings(); renderTimeline(); renderBranchPicker();
+      bumpCounter(); renderFindings(); renderTimeline(); renderBranchPicker(); renderResumeBanner();
       appendLive('info', 'Review started: '+e.headBranch+' vs '+e.baseBranch, 'review');
     } else if (e.kind === 'context'){
       state.steps.set('context', { status:'done', startedAt: e.at, endedAt: e.at, detail: (e.languages.join(', ')||'no lang') + (e.frameworks.length ? ' · '+e.frameworks.join(', ') : '') });
@@ -2051,6 +2249,33 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       state.steps.set(e.pass, { ...existing, status:'error', endedAt: e.at, detail: e.error });
       renderTimeline();
       appendLive('error', e.error, e.pass);
+    } else if (e.kind === 'passAwaitDecision'){
+      const existing = state.steps.get(e.pass) || {};
+      state.steps.set(e.pass, { ...existing, status:'awaitDecision', endedAt: e.at, detail: 'Failed — pick an action: '+e.error });
+      renderTimeline();
+      appendLive('warn', 'awaiting decision: '+e.error, e.pass);
+    } else if (e.kind === 'passDecisionMade'){
+      const existing = state.steps.get(e.pass) || {};
+      // The next event (passStart for retry, paused for stop, nothing for skip)
+      // will update status. For 'skip' specifically, transition here so the
+      // step doesn't linger in awaitDecision while no further event arrives.
+      if (e.decision === 'skip'){
+        state.steps.set(e.pass, { ...existing, status:'skipped', endedAt: e.at, detail: 'Skipped after failure.' });
+      } else if (e.decision === 'stop'){
+        state.steps.set(e.pass, { ...existing, status:'error', endedAt: e.at, detail: existing.detail || 'Failed.' });
+      }
+      renderTimeline();
+      appendLive('info', 'decision: '+e.decision, e.pass);
+    } else if (e.kind === 'paused'){
+      state.isRunning = false;
+      $('#verdict').dataset.v = 'needs-changes'; $('#verdict').textContent = 'PAUSED';
+      renderBranchPicker();
+      renderTimeline();
+      renderResumeBanner();
+      appendLive('warn', 'Review paused: '+e.reason, 'review');
+    } else if (e.kind === 'retryPassStart'){
+      // Reserved for future use — the orchestrator currently fires passStart
+      // for retries too, which is enough for the timeline.
     } else if (e.kind === 'findingAdded'){
       state.findings.push(e.finding); bumpCounter(); renderFindings();
       appendLive('info', '+ ['+(e.finding.severity||'?')+'] '+e.finding.title+' @ '+e.finding.file+':'+e.finding.range.startLine, 'finding');
@@ -2058,10 +2283,10 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       appendLive(e.level, e.message);
     } else if (e.kind === 'done'){
       $('#verdict').dataset.v = e.verdict; $('#verdict').textContent = (e.verdict||'').toUpperCase();
-      state.isRunning = false; renderBranchPicker();
+      state.isRunning = false; renderBranchPicker(); renderResumeBanner();
     } else if (e.kind === 'cancelled'){
       $('#verdict').dataset.v = 'needs-changes'; $('#verdict').textContent = 'CANCELLED';
-      state.isRunning = false; renderBranchPicker();
+      state.isRunning = false; renderBranchPicker(); renderResumeBanner();
     }
   }
 
@@ -2112,6 +2337,11 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     } else if (m.type === 'aheadBehind'){
       if (m.reqId !== state.abReqId) return;
       state.abResult = m.result; renderAB();
+    } else if (m.type === 'partialSummary'){
+      state.partial = m.summary || null;
+      renderResumeBanner();
+      // Per-step Retry visibility depends on partial existing.
+      renderTimeline();
     }
   });
 

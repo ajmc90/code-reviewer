@@ -3,16 +3,17 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { GitService } from './git/gitService';
 import { ClaudeCliClient } from './claude/cliClient';
-import { ReviewOrchestrator } from './core/orchestrator';
+import { ReviewOrchestrator, ReviewPausedError } from './core/orchestrator';
 import { FindingsTreeProvider } from './ui/findingsTree';
 import { SummaryViewProvider } from './ui/summaryView';
 import { FindingsDecorator } from './ui/decorations';
-import { ReviewPanel } from './ui/reviewPanel';
+import { ReviewPanel, PartialReviewSummary } from './ui/reviewPanel';
 import { ReviewStatusBar } from './ui/statusBar';
-import { ReviewEventBus } from './core/events';
-import { Finding, PassConfig, ReviewOptions, ReviewResult } from './types';
+import { PassFailureDecision, PassName, ReviewEventBus } from './core/events';
+import { Finding, PartialReviewState, PassConfig, ReviewOptions, ReviewResult } from './types';
 
 const CACHE_KEY = 'claudeReviewer.lastResult';
+const PARTIAL_KEY = 'claudeReviewer.partialState';
 
 export async function activate(context: vscode.ExtensionContext) {
   const output = vscode.window.createOutputChannel('Claude Review', { log: true });
@@ -44,6 +45,42 @@ export async function activate(context: vscode.ExtensionContext) {
     }
   };
 
+  // Pending pass-failure decisions: orchestrator → user → orchestrator.
+  // When a pass fails, the orchestrator awaits a Promise stored here, keyed
+  // by pass name. The panel resolves it via a 'passDecision' message.
+  const pendingDecisions = new Map<PassName, (d: PassFailureDecision) => void>();
+
+  const savePartial = async (s: PartialReviewState | null) => {
+    await context.workspaceState.update(PARTIAL_KEY, s);
+    broadcastPartialSummary();
+  };
+  const loadPartial = (): PartialReviewState | null => {
+    const raw = context.workspaceState.get<PartialReviewState>(PARTIAL_KEY);
+    if (!raw) return null;
+    // Discard older shapes silently — losing a partial after an extension
+    // upgrade is fine; resuming with stale assumptions is not.
+    if (raw.version !== 1) {
+      log(`Ignoring partial review state with unknown version: ${(raw as any).version}`);
+      return null;
+    }
+    return raw;
+  };
+  const buildSummary = (s: PartialReviewState | null): PartialReviewSummary | null => {
+    if (!s) return null;
+    return {
+      baseBranch: s.opts.baseBranch,
+      headBranch: s.opts.headBranch,
+      completedPasses: [...s.completedPasses],
+      skippedPasses: [...s.skippedPasses],
+      findingCount: s.findings.length,
+      pausedReason: s.pausedReason,
+      startedAt: s.startedAt,
+    };
+  };
+  const broadcastPartialSummary = () => {
+    ReviewPanel.currentInstance()?.setPartialSummary(buildSummary(loadPartial()));
+  };
+
   let lastResult: ReviewResult | null = context.workspaceState.get<ReviewResult>(CACHE_KEY) ?? null;
   if (lastResult) {
     findingsTree.setResult(lastResult);
@@ -69,6 +106,17 @@ export async function activate(context: vscode.ExtensionContext) {
       await runReview({ baseBranch: base, headBranch: head, passes: passes as PassConfig | undefined });
     },
     cancelReview: () => cancelCurrentReview(),
+    getPartialSummary: () => buildSummary(loadPartial()),
+    submitPassDecision: (pass: PassName, decision: PassFailureDecision) => {
+      const resolver = pendingDecisions.get(pass);
+      if (resolver) {
+        pendingDecisions.delete(pass);
+        resolver(decision);
+      }
+    },
+    resumeReview: () => vscode.commands.executeCommand('claudeReviewer.resumeReview'),
+    retryPass: (pass: PassName) => vscode.commands.executeCommand('claudeReviewer.retryPass', pass),
+    discardPartial: () => vscode.commands.executeCommand('claudeReviewer.discardPartial'),
   };
 
   const getWorkspaceRoot = (): string | null => {
@@ -86,7 +134,12 @@ export async function activate(context: vscode.ExtensionContext) {
     return new ClaudeCliClient(cliPath);
   };
 
-  const buildOrchestrator = (root: string, token: vscode.CancellationToken, progress: vscode.Progress<{ message?: string; increment?: number }>) => {
+  const buildOrchestrator = (
+    root: string,
+    token: vscode.CancellationToken,
+    progress: vscode.Progress<{ message?: string; increment?: number }>,
+    extra: { resumeFrom?: PartialReviewState | null; restrictToPasses?: PassName[] } = {},
+  ) => {
     const cfg = vscode.workspace.getConfiguration('claudeReviewer');
     return new ReviewOrchestrator({
       git: new GitService(root),
@@ -101,6 +154,21 @@ export async function activate(context: vscode.ExtensionContext) {
       contextFiles: cfg.get<string[]>('contextFiles', []),
       maxDiffBytes: cfg.get<number>('maxDiffBytes', 1500000),
       events: bus,
+      resumeFrom: extra.resumeFrom ?? null,
+      restrictToPasses: extra.restrictToPasses,
+      onStateSnapshot: (s) => {
+        // Fire-and-forget: workspaceState.update returns a Thenable but we don't
+        // need to await it here. Errors get swallowed by VS Code's host; this
+        // is cache, not source of truth.
+        void savePartial(s);
+      },
+      requestPassDecision: (pass, error) =>
+        new Promise<PassFailureDecision>((resolve) => {
+          // Replace any prior pending decision for the same pass (shouldn't
+          // happen — passes are serial — but be defensive).
+          pendingDecisions.set(pass, resolve);
+          bus.emit({ kind: 'passAwaitDecision', pass, error, at: Date.now() });
+        }),
     });
   };
 
@@ -169,13 +237,37 @@ export async function activate(context: vscode.ExtensionContext) {
       includeUntracked: opts.includeUntracked ?? cfg.get<boolean>('includeUntrackedFiles', false),
     };
 
-    // Open the live panel before starting so the user sees streaming events.
+    await executeReviewLoop({ root, opts: finalOpts });
+  }
+
+  /**
+   * Shared loop that drives the orchestrator. Three entry points feed into it:
+   *  - fresh review (opts only)
+   *  - resume from saved partial state (resumeFrom)
+   *  - retry a single failed/skipped pass (resumeFrom + restrictToPasses)
+   *
+   * Cancellation, partial-state persistence, and result handling are unified
+   * here so all entry points behave consistently.
+   */
+  async function executeReviewLoop(args: {
+    root: string;
+    opts?: ReviewOptions;
+    resumeFrom?: PartialReviewState | null;
+    restrictToPasses?: PassName[];
+    titleSuffix?: string;
+  }): Promise<void> {
+    const { root, resumeFrom, restrictToPasses } = args;
+    const opts = args.opts ?? resumeFrom?.opts;
+    if (!opts) {
+      vscode.window.showErrorMessage('Claude Review: no options or saved state to run from.');
+      return;
+    }
+
     bus.reset();
     ReviewPanel.show(context, bus, panelDeps);
+    broadcastPartialSummary();
 
     if (currentReviewCts) {
-      // A previous review is already running — refuse to start another so we
-      // don't end up with two orchestrators racing on the same workspace.
       vscode.window.showWarningMessage(
         'A review is already running. Cancel it first (Stop button in the panel or "Claude Review: Cancel Running Review").',
       );
@@ -183,22 +275,36 @@ export async function activate(context: vscode.ExtensionContext) {
     }
     const cts = new vscode.CancellationTokenSource();
     currentReviewCts = cts;
+    // If cancellation fires while the orchestrator is parked awaiting a
+    // pass-failure decision, resolve the pending promise with 'stop' so the
+    // orchestrator exits cleanly via ReviewPausedError instead of hanging.
+    cts.token.onCancellationRequested(() => {
+      for (const [, resolver] of pendingDecisions) resolver('stop');
+      pendingDecisions.clear();
+    });
+
+    const title =
+      (restrictToPasses && restrictToPasses.length
+        ? `Retrying ${restrictToPasses.join(', ')} on ${opts.headBranch}`
+        : resumeFrom
+          ? `Resuming review of ${opts.headBranch}`
+          : `Reviewing ${opts.headBranch} vs ${opts.baseBranch}`) + (args.titleSuffix ?? '');
 
     try {
       await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `Reviewing ${finalOpts.headBranch} vs ${finalOpts.baseBranch}`,
-          cancellable: true,
-        },
+        { location: vscode.ProgressLocation.Notification, title, cancellable: true },
         async (progress, progressToken) => {
-          // Bridge VS Code's progress-X token into our central CTS so any UI
-          // affordance cancels the same operation.
           progressToken.onCancellationRequested(() => cts.cancel());
           try {
-            const orchestrator = buildOrchestrator(root, cts.token, progress);
-            const result = await orchestrator.review(finalOpts);
+            const orchestrator = buildOrchestrator(root, cts.token, progress, { resumeFrom, restrictToPasses });
+            const result = await orchestrator.review(opts);
             await setResult(result);
+            // A retry-single-pass should leave the partial state intact so the
+            // user can keep retrying other failed passes. Full reviews and full
+            // Resume runs clear it since they ran every applicable pass.
+            if (!restrictToPasses || restrictToPasses.length === 0) {
+              await savePartial(null);
+            }
             const sev = result.findings.reduce((acc: Record<string, number>, f: Finding) => {
               acc[f.severity] = (acc[f.severity] || 0) + 1;
               return acc;
@@ -208,6 +314,18 @@ export async function activate(context: vscode.ExtensionContext) {
               if (pick === 'Open Panel') vscode.commands.executeCommand('claudeReviewer.showPanel');
             });
           } catch (e: any) {
+            if (e instanceof ReviewPausedError) {
+              // Partial state already saved via onStateSnapshot. Inform the user
+              // and let the panel's Resume affordance take over.
+              log(`Review paused: ${e.state.pausedReason ?? '(unknown reason)'}`);
+              vscode.window.showWarningMessage(
+                `Review stopped after a failure. Open the Claude Review panel and click Resume to continue.`,
+                'Open Panel',
+              ).then((pick) => {
+                if (pick === 'Open Panel') vscode.commands.executeCommand('claudeReviewer.showPanel');
+              });
+              return;
+            }
             if ((e?.message ?? '').toLowerCase().includes('cancelled')) {
               log('Review cancelled.');
               bus.emit({ kind: 'cancelled', at: Date.now() });
@@ -222,6 +340,11 @@ export async function activate(context: vscode.ExtensionContext) {
     } finally {
       currentReviewCts = null;
       cts.dispose();
+      // Reject any leftover pending decisions so we don't leak unresolved
+      // promises across reviews.
+      for (const [, resolver] of pendingDecisions) resolver('stop');
+      pendingDecisions.clear();
+      broadcastPartialSummary();
     }
   }
 
@@ -241,6 +364,49 @@ export async function activate(context: vscode.ExtensionContext) {
         return;
       }
       cancelCurrentReview();
+    }),
+    vscode.commands.registerCommand('claudeReviewer.resumeReview', async () => {
+      const partial = loadPartial();
+      if (!partial) {
+        vscode.window.showInformationMessage('No paused review to resume.');
+        return;
+      }
+      const root = getWorkspaceRoot();
+      if (!root) return;
+      await executeReviewLoop({ root, resumeFrom: partial });
+    }),
+    vscode.commands.registerCommand('claudeReviewer.retryPass', async (pass?: PassName) => {
+      const partial = loadPartial();
+      if (!partial) {
+        vscode.window.showInformationMessage('No paused review to retry from.');
+        return;
+      }
+      if (!pass) {
+        vscode.window.showWarningMessage('Pass name required to retry.');
+        return;
+      }
+      const root = getWorkspaceRoot();
+      if (!root) return;
+      // Make sure the pass isn't blocked by completed/skipped sets.
+      const fresh: PartialReviewState = {
+        ...partial,
+        completedPasses: partial.completedPasses.filter((p) => p !== pass),
+        skippedPasses: partial.skippedPasses.filter((p) => p !== pass),
+        findings: partial.findings.filter((f) => f.pass !== pass),
+        pausedReason: undefined,
+      };
+      await executeReviewLoop({ root, resumeFrom: fresh, restrictToPasses: [pass] });
+    }),
+    vscode.commands.registerCommand('claudeReviewer.discardPartial', async () => {
+      const partial = loadPartial();
+      if (!partial) return;
+      const ok = await vscode.window.showWarningMessage(
+        'Discard the paused review? You will lose its findings and have to start over.',
+        { modal: true },
+        'Discard',
+      );
+      if (ok !== 'Discard') return;
+      await savePartial(null);
     }),
     vscode.commands.registerCommand('claudeReviewer.reviewChangedFiles', async () => {
       // Compare HEAD against working tree by diffing HEAD against itself with --no-index style.

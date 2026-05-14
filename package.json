@@ -51,6 +51,24 @@
         "icon": "$(stop-circle)"
       },
       {
+        "command": "claudeReviewer.resumeReview",
+        "title": "Claude Review: Resume Paused Review",
+        "category": "Claude Review",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "claudeReviewer.retryPass",
+        "title": "Claude Review: Retry a Single Pass",
+        "category": "Claude Review",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudeReviewer.discardPartial",
+        "title": "Claude Review: Discard Paused Review",
+        "category": "Claude Review",
+        "icon": "$(trash)"
+      },
+      {
         "command": "claudeReviewer.reviewChangedFiles",
         "title": "Claude Review: Review Uncommitted Changes",
         "category": "Claude Review"
