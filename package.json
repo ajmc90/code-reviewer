@@ -1,0 +1,270 @@
+{
+  "name": "claude-branch-reviewer",
+  "displayName": "Claude Branch Reviewer",
+  "description": "Deep, multi-pass code review of git branches powered by Claude Code CLI. Reasons, questions itself, explores alternatives. Precise file/line anchoring with applicable fixes. No API key required — uses your local Claude Code.",
+  "version": "0.1.0",
+  "publisher": "andres",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers",
+    "Linters",
+    "AI"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "code review",
+    "git",
+    "branch",
+    "ai"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeReviewer.showPanel",
+        "title": "Claude Review: Open Review Panel",
+        "category": "Claude Review",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "claudeReviewer.reviewBranch",
+        "title": "Claude Review: Review Branch vs Base",
+        "category": "Claude Review",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "claudeReviewer.reviewCurrentBranch",
+        "title": "Claude Review: Review Current Branch vs main",
+        "category": "Claude Review"
+      },
+      {
+        "command": "claudeReviewer.reviewChangedFiles",
+        "title": "Claude Review: Review Uncommitted Changes",
+        "category": "Claude Review"
+      },
+      {
+        "command": "claudeReviewer.openFinding",
+        "title": "Open Finding",
+        "category": "Claude Review"
+      },
+      {
+        "command": "claudeReviewer.applyFix",
+        "title": "Apply Suggested Fix",
+        "category": "Claude Review"
+      },
+      {
+        "command": "claudeReviewer.dismissFinding",
+        "title": "Dismiss Finding",
+        "category": "Claude Review"
+      },
+      {
+        "command": "claudeReviewer.askFollowUp",
+        "title": "Ask Claude a Follow-Up",
+        "category": "Claude Review"
+      },
+      {
+        "command": "claudeReviewer.exportReport",
+        "title": "Export Review Report (Markdown)",
+        "category": "Claude Review"
+      },
+      {
+        "command": "claudeReviewer.clearCache",
+        "title": "Clear Review Cache",
+        "category": "Claude Review"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claudeReviewer.reviewBranch",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "claudeReviewer.reviewBranch",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "claudeReviewer.reviewBranch",
+          "when": "view == claudeReviewer.findings",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "claudeReviewer.openFinding",
+          "when": "view == claudeReviewer.findings && viewItem == finding",
+          "group": "inline"
+        },
+        {
+          "command": "claudeReviewer.applyFix",
+          "when": "view == claudeReviewer.findings && viewItem == finding-with-fix",
+          "group": "inline"
+        },
+        {
+          "command": "claudeReviewer.dismissFinding",
+          "when": "view == claudeReviewer.findings && viewItem =~ /finding/",
+          "group": "inline"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudeReviewer",
+          "title": "Claude Review",
+          "icon": "media/claude.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudeReviewer": [
+        {
+          "id": "claudeReviewer.findings",
+          "name": "Findings",
+          "icon": "media/claude.svg",
+          "contextualTitle": "Claude Review"
+        },
+        {
+          "id": "claudeReviewer.summary",
+          "name": "Summary",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Branch Reviewer",
+      "properties": {
+        "claudeReviewer.claudeCliPath": {
+          "type": "string",
+          "default": "claude",
+          "description": "Path to the Claude Code CLI binary. Leave as 'claude' if it's on your PATH."
+        },
+        "claudeReviewer.model": {
+          "type": "string",
+          "default": "",
+          "description": "Optional --model override passed to the Claude CLI (e.g. 'opus', 'sonnet'). Empty = let the CLI decide."
+        },
+        "claudeReviewer.baseBranch": {
+          "type": "string",
+          "default": "",
+          "description": "Default base branch (e.g. main, master, develop). Leave empty to auto-detect."
+        },
+        "claudeReviewer.maxDiffBytes": {
+          "type": "number",
+          "default": 1500000,
+          "description": "Maximum diff size in bytes. Larger diffs are chunked file-by-file."
+        },
+        "claudeReviewer.passes": {
+          "type": "object",
+          "default": {
+            "structural": true,
+            "explore": true,
+            "security": true,
+            "performance": true,
+            "accessibility": true,
+            "tests": true,
+            "gaps": true,
+            "permute": true,
+            "critique": true
+          },
+          "description": "Which analysis passes to run. structural lets Claude grep/read the repo to gather context before reviewing. accessibility runs only when UI/CSS files are in the diff. gaps audits what the author probably should have touched but didn't."
+        },
+        "claudeReviewer.reasoningDepth": {
+          "type": "string",
+          "enum": ["fast", "balanced", "deep", "obsessive"],
+          "default": "deep",
+          "description": "How hard Claude should think. 'obsessive' permutes alternatives and self-critiques every finding."
+        },
+        "claudeReviewer.includeUntrackedFiles": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include untracked files in the review."
+        },
+        "claudeReviewer.contextFiles": {
+          "type": "array",
+          "default": ["CLAUDE.md", "README.md", "CONTRIBUTING.md", "ARCHITECTURE.md"],
+          "description": "Project files Claude should always read for context."
+        },
+        "claudeReviewer.ignoreGlobs": {
+          "type": "array",
+          "default": [
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/.next/**",
+            "**/out/**",
+            "**/coverage/**",
+            "**/*.lock",
+            "**/*.min.js",
+            "**/package-lock.json",
+            "**/yarn.lock",
+            "**/pnpm-lock.yaml"
+          ],
+          "description": "Glob patterns of files to exclude from review."
+        },
+        "claudeReviewer.cliTimeoutMs": {
+          "type": "number",
+          "default": 600000,
+          "description": "How long to wait for each Claude CLI invocation before timing out (ms)."
+        }
+      }
+    },
+    "colors": [
+      {
+        "id": "claudeReviewer.critical",
+        "description": "Critical finding gutter color",
+        "defaults": { "dark": "#ff4d4f", "light": "#cf1322", "highContrast": "#ff0000" }
+      },
+      {
+        "id": "claudeReviewer.major",
+        "description": "Major finding gutter color",
+        "defaults": { "dark": "#faad14", "light": "#d48806", "highContrast": "#ffaa00" }
+      },
+      {
+        "id": "claudeReviewer.minor",
+        "description": "Minor finding gutter color",
+        "defaults": { "dark": "#1890ff", "light": "#096dd9", "highContrast": "#00aaff" }
+      },
+      {
+        "id": "claudeReviewer.nit",
+        "description": "Nit finding gutter color",
+        "defaults": { "dark": "#52c41a", "light": "#389e0d", "highContrast": "#00ff00" }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.2",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "local"
+  },
+  "license": "MIT"
+}
