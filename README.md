@@ -182,17 +182,30 @@ This extension **does not send code to any third-party API of its own**. It shel
 
 ## Develop locally
 
+This project uses [**pnpm**](https://pnpm.io) as its package manager.
+
 ```bash
-npm install
-npm run compile
+# Install pnpm if you don't have it yet
+npm install -g pnpm        # or: corepack enable && corepack use pnpm@latest
+
+pnpm install
+pnpm run compile
 
 # In VS Code, press F5 to launch a development host with the extension loaded.
+```
+
+Other useful scripts:
+
+```bash
+pnpm run watch    # incremental TypeScript compilation
+pnpm run lint     # ESLint over src/
+pnpm audit        # check for known vulnerabilities
 ```
 
 Package as a `.vsix`:
 
 ```bash
-npm run package
+pnpm run package
 code --install-extension claude-branch-reviewer-0.1.0.vsix
 ```
 
