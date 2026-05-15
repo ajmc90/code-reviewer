@@ -263,16 +263,30 @@ export async function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    bus.reset();
-    ReviewPanel.show(context, bus, panelDeps);
-    broadcastPartialSummary();
-
+    // Guard FIRST: a double-click on Start while a review is running must
+    // not clobber the in-flight review's event buffer or UI surfaces.
     if (currentReviewCts) {
       vscode.window.showWarningMessage(
         'A review is already running. Cancel it first (Stop button in the panel or "Claude Review: Cancel Running Review").',
       );
       return;
     }
+
+    // Fresh runs start from a clean slate. Without this, the findings tree,
+    // decorations, summary view, and the panel's cached result keep showing
+    // the previous review's data until the new one completes — and if the
+    // panel is reopened mid-run, its 'ready' handler replays the stale
+    // `this.result` on top of the new events, surfacing prior findings.
+    // Resume/retry runs intentionally skip this so the partial findings
+    // already on display aren't wiped.
+    const isFreshRun = !resumeFrom && (!restrictToPasses || restrictToPasses.length === 0);
+    if (isFreshRun) {
+      await setResult(null);
+    }
+
+    bus.reset();
+    ReviewPanel.show(context, bus, panelDeps);
+    broadcastPartialSummary();
     const cts = new vscode.CancellationTokenSource();
     currentReviewCts = cts;
     // If cancellation fires while the orchestrator is parked awaiting a
