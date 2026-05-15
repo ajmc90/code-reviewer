@@ -441,6 +441,7 @@ main[data-collapsed="1"] .left{
   overflow: hidden;
 }
 main[data-collapsed="1"] .left > .left-full{ display: none }
+.left-full{ display:flex; flex-direction:column; gap: var(--s-5) }
 .left-rail{ display: none }
 main[data-collapsed="1"] .left > .left-rail{ display: flex }
 
@@ -599,7 +600,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 .passes-head .passes-count{ color: var(--fg-subtle); font-size: var(--t-xs) }
 
 /* Section primitive */
-.section{ display:flex; flex-direction:column; gap:var(--s-2); min-width:0 }
+.section{ display:flex; flex-direction:column; gap:var(--s-3); min-width:0 }
 .section-title{
   margin:0;
   font-size: var(--t-xs);
@@ -1024,7 +1025,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 /* ─────────────────────────────────────────────────────────────────
  * Finding cards
  * ────────────────────────────────────────────────────────────── */
-.findings{ display:flex; flex-direction:column; gap: var(--s-2) }
+.findings{ display:flex; flex-direction:column; gap: var(--s-3) }
 .finding{
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
