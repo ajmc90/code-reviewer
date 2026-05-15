@@ -1,4 +1,5 @@
 import { Finding, ReviewSummary, Severity, Category } from '../types';
+import { Lang } from '../i18n';
 
 interface RawOutput {
   summary?: Partial<ReviewSummary>;
@@ -95,7 +96,7 @@ function extractBalancedObjects(text: string): string[] {
   return out;
 }
 
-export function parseClaudeOutput(text: string): { summary?: ReviewSummary; findings: Finding[] } {
+export function parseClaudeOutput(text: string, lang: Lang = 'en'): { summary?: ReviewSummary; findings: Finding[] } {
   const jsonStr = extractJson(text);
   if (!jsonStr) {
     return { findings: [] };
@@ -117,7 +118,7 @@ export function parseClaudeOutput(text: string): { summary?: ReviewSummary; find
   }
 
   const findings: Finding[] = (raw.findings ?? [])
-    .map((f, i) => normalizeFinding(f, i))
+    .map((f, i) => normalizeFinding(f, i, lang))
     .filter((f): f is Finding => f !== null);
 
   let summary: ReviewSummary | undefined;
@@ -159,7 +160,7 @@ const VALID_CATEGORY: Category[] = [
   'other',
 ];
 
-function normalizeFinding(f: any, idx: number): Finding | null {
+function normalizeFinding(f: any, idx: number, lang: Lang): Finding | null {
   if (!f || typeof f !== 'object') return null;
   if (typeof f.file !== 'string' || !f.file) return null;
   const startLine = Math.max(1, parseInt(f.startLine, 10) || 1);
@@ -182,6 +183,7 @@ function normalizeFinding(f: any, idx: number): Finding | null {
     relatedFiles: arr(f.relatedFiles),
     confidence: ['high', 'medium', 'low'].includes(f.confidence) ? f.confidence : 'medium',
     pass: 'explore',
+    originalLang: lang,
     suggestedFix: f.suggestedFix
       ? {
           description: String(f.suggestedFix.description ?? ''),

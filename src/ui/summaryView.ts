@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ReviewResult } from '../types';
+import { Lang, t } from '../i18n';
 
 /**
  * Sidebar webview that doubles as a launcher and a quick summary of the last
@@ -13,6 +14,8 @@ export class SummaryViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'claudeReviewer.summary';
   private view?: vscode.WebviewView;
   private result: ReviewResult | null = null;
+
+  constructor(private readonly getLang: () => Lang) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     this.view = webviewView;
@@ -36,33 +39,39 @@ export class SummaryViewProvider implements vscode.WebviewViewProvider {
     if (this.view) this.view.webview.html = this.render();
   }
 
+  onLanguageChanged() {
+    if (this.view) this.view.webview.html = this.render();
+  }
+
   private render(): string {
     const nonce = String(Math.random()).slice(2);
     return wrap(nonce, this.result ? this.renderResult() : this.renderEmpty());
   }
 
   private renderEmpty(): string {
+    const lang = this.getLang();
     return /* html */ `
       <div class="empty">
-        <div class="brand"><span class="dot" aria-hidden="true"></span>Claude Review</div>
-        <p class="lead">Deep, multi-pass code review of any git branch — runs locally via the Claude CLI.</p>
+        <div class="brand"><span class="dot" aria-hidden="true"></span>${esc(t('summary.brand', lang))}</div>
+        <p class="lead">${esc(t('summary.tagline', lang))}</p>
         <div class="cta">
           <button class="btn btn--primary" data-act="openPanel" type="button">
-            <span aria-hidden="true">⬉</span> Open Review Panel
+            <span aria-hidden="true">⬉</span> ${esc(t('summary.openPanel', lang))}
           </button>
           <button class="btn btn--ghost" data-act="run" type="button">
-            <span aria-hidden="true">▶</span> Start review
+            <span aria-hidden="true">▶</span> ${esc(t('summary.startReview', lang))}
           </button>
         </div>
-        <p class="hint">In the panel you can pick branches, fetch from remotes, and watch the review stream live.</p>
+        <p class="hint">${esc(t('summary.hintEmpty', lang))}</p>
       </div>`;
   }
 
   private renderResult(): string {
+    const lang = this.getLang();
     const s = this.result!.summary;
     const findingsByLevel = group(this.result!.findings.filter((f) => !f.dismissed), (f) => f.severity);
     const counts = (['critical', 'major', 'minor', 'nit', 'praise'] as const)
-      .map((k) => `<span class="chip chip-${k}"><span class="swatch" aria-hidden="true"></span>${k}<b>${(findingsByLevel[k] || []).length}</b></span>`)
+      .map((k) => `<span class="chip chip-${k}"><span class="swatch" aria-hidden="true"></span>${esc(t(`panel.${k}` as Parameters<typeof t>[0], lang))}<b>${(findingsByLevel[k] || []).length}</b></span>`)
       .join('');
 
     const verdictText = (s.overallVerdict || '').toUpperCase();
@@ -70,41 +79,41 @@ export class SummaryViewProvider implements vscode.WebviewViewProvider {
     return /* html */ `
       <header class="hdr">
         <div class="title">
-          <span class="kicker">Last review</span>
-          <h2><code>${esc(s.branch)}</code> <span class="vs">vs</span> <code>${esc(s.baseBranch)}</code></h2>
+          <span class="kicker">${esc(t('summary.lastReview', lang))}</span>
+          <h2><code>${esc(s.branch)}</code> <span class="vs">${esc(t('summary.vs', lang))}</span> <code>${esc(s.baseBranch)}</code></h2>
         </div>
-        <span class="verdict" data-v="${esc(s.overallVerdict || '')}" aria-label="Verdict: ${esc(verdictText)}">${esc(verdictText)}</span>
+        <span class="verdict" data-v="${esc(s.overallVerdict || '')}" aria-label="${esc(t('summary.verdictLabel', lang, { verdict: verdictText }))}">${esc(verdictText)}</span>
       </header>
 
       <div class="meta">
-        <span>${s.filesChanged} files</span><span class="sep">·</span>
+        <span>${esc(t('summary.files', lang, { count: s.filesChanged }))}</span><span class="sep">·</span>
         <span class="add">+${s.linesAdded}</span><span class="del">/-${s.linesRemoved}</span><span class="sep">·</span>
-        <span>risk ${s.riskScore}/100</span><span class="sep">·</span>
-        <span>${this.result!.passesRun.length} passes</span><span class="sep">·</span>
-        <span>${Math.round(this.result!.durationMs / 1000)}s</span>
+        <span>${esc(t('summary.risk', lang, { score: s.riskScore }))}</span><span class="sep">·</span>
+        <span>${esc(t('summary.passes', lang, { count: this.result!.passesRun.length }))}</span><span class="sep">·</span>
+        <span>${esc(t('summary.seconds', lang, { seconds: Math.round(this.result!.durationMs / 1000) }))}</span>
       </div>
 
-      <div class="chips" role="group" aria-label="Findings by severity">${counts}</div>
+      <div class="chips" role="group" aria-label="${esc(t('summary.findingsBySeverity', lang))}">${counts}</div>
 
       <div class="cta">
         <button class="btn btn--primary" data-act="openPanel" type="button">
-          <span aria-hidden="true">⬉</span> Open Review Panel
+          <span aria-hidden="true">⬉</span> ${esc(t('summary.openPanel', lang))}
         </button>
         <button class="btn btn--ghost" data-act="run" type="button">
-          <span aria-hidden="true">▶</span> New review
+          <span aria-hidden="true">▶</span> ${esc(t('summary.newReview', lang))}
         </button>
-        <button class="btn btn--ghost" data-act="export" type="button" title="Export as Markdown">
-          Export
+        <button class="btn btn--ghost" data-act="export" type="button" title="${esc(t('summary.exportTitle', lang))}">
+          ${esc(t('summary.export', lang))}
         </button>
       </div>
 
       <details ${s.executiveSummary ? 'open' : ''}>
-        <summary>Executive summary</summary>
-        <p>${esc(s.executiveSummary || '(none)')}</p>
+        <summary>${esc(t('summary.executiveSummary', lang))}</summary>
+        <p>${esc(s.executiveSummary || t('summary.executiveNone', lang))}</p>
       </details>
-      ${s.topConcerns.length ? `<details><summary>Top concerns (${s.topConcerns.length})</summary><ul>${s.topConcerns.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></details>` : ''}
-      ${s.strengths.length ? `<details><summary>Strengths (${s.strengths.length})</summary><ul>${s.strengths.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></details>` : ''}
-      <p class="hint">For the full interactive view — findings, problem/solution cards, live log — click <strong>Open Review Panel</strong>.</p>
+      ${s.topConcerns.length ? `<details><summary>${esc(t('summary.topConcerns', lang, { count: s.topConcerns.length }))}</summary><ul>${s.topConcerns.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></details>` : ''}
+      ${s.strengths.length ? `<details><summary>${esc(t('summary.strengths', lang, { count: s.strengths.length }))}</summary><ul>${s.strengths.map((c) => `<li>${esc(c)}</li>`).join('')}</ul></details>` : ''}
+      <p class="hint">${t('summary.hintFull', lang)}</p>
     `;
   }
 }

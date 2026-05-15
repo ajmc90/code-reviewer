@@ -31,11 +31,19 @@ export class ReviewEventBus {
   private emitter = new vscode.EventEmitter<ReviewEvent>();
   readonly onEvent = this.emitter.event;
   private buffer: ReviewEvent[] = [];
-  private readonly maxBuffer = 500;
+  // Cap is generous because passOutput (the high-volume streaming event) is
+  // excluded from the buffer — structural events for a full review fit well
+  // under this even with hundreds of findings.
+  private readonly maxBuffer = 2000;
 
   emit(e: ReviewEvent) {
-    this.buffer.push(e);
-    if (this.buffer.length > this.maxBuffer) this.buffer.shift();
+    // passOutput is streamed live but intentionally not buffered: it's emitted
+    // many times per pass and would evict the passStart/passDone/findingAdded
+    // events the panel needs to rebuild its timeline after a tab reopen.
+    if (e.kind !== 'passOutput') {
+      this.buffer.push(e);
+      if (this.buffer.length > this.maxBuffer) this.buffer.shift();
+    }
     this.emitter.fire(e);
   }
 

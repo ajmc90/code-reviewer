@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ReviewEventBus, PassName } from '../core/events';
+import { Lang, t } from '../i18n';
 
 const PASS_ORDER: PassName[] = ['context', 'diff', 'structural', 'explore', 'security', 'performance', 'accessibility', 'tests', 'gaps', 'permute', 'critique', 'summary'];
 const PASS_SHORT: Record<PassName, string> = {
@@ -27,7 +28,7 @@ export class ReviewStatusBar implements vscode.Disposable {
   private startedAt = 0;
   private timer?: NodeJS.Timeout;
 
-  constructor(bus: ReviewEventBus) {
+  constructor(bus: ReviewEventBus, private readonly getLang: () => Lang) {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     this.item.command = 'claudeReviewer.showPanel';
     this.render();
@@ -74,27 +75,32 @@ export class ReviewStatusBar implements vscode.Disposable {
     this.timer = undefined;
   }
 
+  onLanguageChanged() {
+    this.render();
+  }
+
   private render() {
+    const lang = this.getLang();
     let text: string;
     let bg: vscode.ThemeColor | undefined;
     if (this.state === 'idle') {
-      text = '$(eye) Claude Review';
+      text = `$(eye) ${t('status.idle', lang)}`;
     } else if (this.state === 'running') {
       const elapsed = Math.round((Date.now() - this.startedAt) / 1000);
       const order = PASS_ORDER.filter((p) => this.completed.has(p) || this.current === p);
       const last = this.current ?? order[order.length - 1] ?? 'context';
       const dots = PASS_ORDER.map((p) => (this.completed.has(p) ? '●' : this.current === p ? '◐' : '·')).join('');
-      text = `$(sync~spin) Reviewing ${PASS_SHORT[last]} ${dots}  ${this.findingCount} findings · ${elapsed}s`;
+      text = `$(sync~spin) ${t('status.reviewing', lang, { pass: PASS_SHORT[last], dots, count: this.findingCount, seconds: elapsed })}`;
       bg = new vscode.ThemeColor('statusBarItem.prominentBackground');
     } else if (this.state === 'done') {
-      text = `$(check) Review done · ${this.findingCount} findings`;
+      text = `$(check) ${t('status.done', lang, { count: this.findingCount })}`;
     } else {
-      text = '$(error) Review failed';
+      text = `$(error) ${t('status.failed', lang)}`;
       bg = new vscode.ThemeColor('statusBarItem.errorBackground');
     }
     this.item.text = text;
     this.item.backgroundColor = bg;
-    this.item.tooltip = 'Click to open Claude Review panel';
+    this.item.tooltip = t('status.tooltip', lang);
   }
 
   dispose() {

@@ -11,6 +11,7 @@ import { ReviewPanel, PartialReviewSummary } from './ui/reviewPanel';
 import { ReviewStatusBar } from './ui/statusBar';
 import { PassFailureDecision, PassName, ReviewEventBus } from './core/events';
 import { Finding, PartialReviewState, PassConfig, ReviewOptions, ReviewResult } from './types';
+import { Lang, getLang, onDidChangeLanguage, setLang, t } from './i18n';
 
 const CACHE_KEY = 'claudeReviewer.lastResult';
 const PARTIAL_KEY = 'claudeReviewer.partialState';
@@ -19,11 +20,16 @@ export async function activate(context: vscode.ExtensionContext) {
   const output = vscode.window.createOutputChannel('Claude Review', { log: true });
   const log = (m: string) => output.appendLine(m);
 
+  // Bound t() that always reads the current language. Captured as a closure so
+  // every call site picks up language toggles immediately without re-plumbing.
+  const tr = (key: Parameters<typeof t>[0], params?: Record<string, string | number>) =>
+    t(key, getLang(context), params);
+
   const findingsTree = new FindingsTreeProvider();
-  const summaryView = new SummaryViewProvider();
+  const summaryView = new SummaryViewProvider(() => getLang(context));
   const decorator = new FindingsDecorator();
   const bus = new ReviewEventBus();
-  const statusBar = new ReviewStatusBar(bus);
+  const statusBar = new ReviewStatusBar(bus, () => getLang(context));
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider('claudeReviewer.findings', findingsTree),
@@ -117,12 +123,73 @@ export async function activate(context: vscode.ExtensionContext) {
     resumeReview: () => vscode.commands.executeCommand('claudeReviewer.resumeReview'),
     retryPass: (pass: PassName) => vscode.commands.executeCommand('claudeReviewer.retryPass', pass),
     discardPartial: () => vscode.commands.executeCommand('claudeReviewer.discardPartial'),
+    getLang: () => getLang(context),
+    setLang: (lang: Lang) => setLang(context, lang),
+    translateFinding: async (id: string, targetLang: Lang) => {
+      await translateFindingOnDemand(id, targetLang);
+    },
   };
+
+  // Per-finding on-demand translator. Looks up the finding by id, asks Claude
+  // to translate its user-visible fields, caches the result on the finding
+  // (so subsequent toggles are instant), and notifies the panel webview.
+  async function translateFindingOnDemand(id: string, targetLang: Lang): Promise<void> {
+    const finding = lastResult?.findings.find((f) => f.id === id);
+    if (!finding || !lastResult) return;
+    // Already cached → just inform the webview so it can flip the row.
+    if (finding.translations?.[targetLang]) {
+      ReviewPanel.currentInstance()?.postFindingTranslation({
+        id,
+        lang: targetLang,
+        fields: finding.translations[targetLang],
+      });
+      return;
+    }
+    // If the user asked for the original language, nothing to do server-side —
+    // the webview already has the canonical fields.
+    if ((finding.originalLang ?? 'en') === targetLang) {
+      ReviewPanel.currentInstance()?.postFindingTranslation({
+        id,
+        lang: targetLang,
+        fields: extractTranslatedFields(finding),
+      });
+      return;
+    }
+    const root = getWorkspaceRoot();
+    if (!root) return;
+    const cfg = vscode.workspace.getConfiguration('claudeReviewer');
+    const model = cfg.get<string>('translationModel', '') || cfg.get<string>('model', '') || undefined;
+    const cli = buildCli();
+    ReviewPanel.currentInstance()?.postFindingTranslationPending(id, targetLang);
+    try {
+      const { translateFinding } = await import('./claude/translator');
+      const translated = await translateFinding({
+        cli,
+        finding,
+        targetLang,
+        cwd: root,
+        model,
+        timeoutMs: cfg.get<number>('cliTimeoutMs', 600000),
+      });
+      finding.translations = { ...(finding.translations ?? {}), [targetLang]: translated };
+      await setResult(lastResult);
+      ReviewPanel.currentInstance()?.postFindingTranslation({
+        id,
+        lang: targetLang,
+        fields: translated,
+      });
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      log(`Translation failed for finding ${id}: ${msg}`);
+      ReviewPanel.currentInstance()?.postFindingTranslationError(id, targetLang, msg);
+      vscode.window.showErrorMessage(tr('notif.translationFailed', { error: msg }));
+    }
+  }
 
   const getWorkspaceRoot = (): string | null => {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) {
-      vscode.window.showErrorMessage('Claude Review: open a folder first.');
+      vscode.window.showErrorMessage(tr('notif.openFolderFirst'));
       return null;
     }
     return folder.uri.fsPath;
@@ -184,7 +251,7 @@ export async function activate(context: vscode.ExtensionContext) {
     if (!root) return;
     const git = new GitService(root);
     if (!(await git.isRepo())) {
-      vscode.window.showErrorMessage('Claude Review: not a git repository.');
+      vscode.window.showErrorMessage(tr('notif.notGitRepo'));
       return;
     }
 
@@ -195,10 +262,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
     let base = opts.baseBranch ?? detectedBase;
     if (opts.interactive) {
-      const chosenBase = await pickBranch(git, `Base branch (default: ${detectedBase})`, detectedBase);
+      const chosenBase = await pickBranch(git, tr('notif.pickBase', { default: detectedBase }), detectedBase);
       if (!chosenBase) return;
       base = chosenBase;
-      const chosenHead = await pickBranch(git, `Branch to review (default: ${head})`, head);
+      const chosenHead = await pickBranch(git, tr('notif.pickHead', { default: head }), head);
       if (!chosenHead) return;
       opts.headBranch = chosenHead;
     }
@@ -235,6 +302,7 @@ export async function activate(context: vscode.ExtensionContext) {
         gaps: overridePasses?.gaps ?? passesCfg.gaps ?? true,
       },
       includeUntracked: opts.includeUntracked ?? cfg.get<boolean>('includeUntrackedFiles', false),
+      lang: getLang(context),
     };
 
     await executeReviewLoop({ root, opts: finalOpts });
@@ -259,18 +327,12 @@ export async function activate(context: vscode.ExtensionContext) {
     const { root, resumeFrom, restrictToPasses } = args;
     const opts = args.opts ?? resumeFrom?.opts;
     if (!opts) {
-      vscode.window.showErrorMessage('Claude Review: no options or saved state to run from.');
+      vscode.window.showErrorMessage(tr('notif.noOptsOrState'));
       return;
     }
 
-    // Guard FIRST: a double-click on Start while a review is running must
-    // not clobber the in-flight review's event buffer or UI surfaces.
-    if (currentReviewCts) {
-      vscode.window.showWarningMessage(
-        'A review is already running. Cancel it first (Stop button in the panel or "Claude Review: Cancel Running Review").',
-      );
-      return;
-    }
+    bus.reset();
+    ReviewPanel.show(context, bus, panelDeps);
 
     // Fresh runs start from a clean slate. Without this, the findings tree,
     // decorations, summary view, and the panel's cached result keep showing
@@ -284,9 +346,12 @@ export async function activate(context: vscode.ExtensionContext) {
       await setResult(null);
     }
 
-    bus.reset();
-    ReviewPanel.show(context, bus, panelDeps);
     broadcastPartialSummary();
+
+    if (currentReviewCts) {
+      vscode.window.showWarningMessage(tr('notif.reviewAlreadyRunning'));
+      return;
+    }
     const cts = new vscode.CancellationTokenSource();
     currentReviewCts = cts;
     // If cancellation fires while the orchestrator is parked awaiting a
@@ -299,10 +364,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const title =
       (restrictToPasses && restrictToPasses.length
-        ? `Retrying ${restrictToPasses.join(', ')} on ${opts.headBranch}`
+        ? tr('title.retrying', { passes: restrictToPasses.join(', '), head: opts.headBranch })
         : resumeFrom
-          ? `Resuming review of ${opts.headBranch}`
-          : `Reviewing ${opts.headBranch} vs ${opts.baseBranch}`) + (args.titleSuffix ?? '');
+          ? tr('title.resuming', { head: opts.headBranch })
+          : tr('title.reviewing', { head: opts.headBranch, base: opts.baseBranch })) + (args.titleSuffix ?? '');
 
     try {
       await vscode.window.withProgress(
@@ -323,21 +388,27 @@ export async function activate(context: vscode.ExtensionContext) {
               acc[f.severity] = (acc[f.severity] || 0) + 1;
               return acc;
             }, {});
-            const msg = `Review done · verdict: ${result.summary.overallVerdict} · critical:${sev.critical || 0} major:${sev.major || 0} minor:${sev.minor || 0}`;
-            vscode.window.showInformationMessage(msg, 'Open Panel').then((pick) => {
-              if (pick === 'Open Panel') vscode.commands.executeCommand('claudeReviewer.showPanel');
+            const openPanelLabel = tr('notif.openPanel');
+            const msg = tr('notif.reviewDone', {
+              verdict: result.summary.overallVerdict,
+              critical: sev.critical || 0,
+              major: sev.major || 0,
+              minor: sev.minor || 0,
+            });
+            vscode.window.showInformationMessage(msg, openPanelLabel).then((pick) => {
+              if (pick === openPanelLabel) vscode.commands.executeCommand('claudeReviewer.showPanel');
             });
           } catch (e: any) {
             if (e instanceof ReviewPausedError) {
               // Partial state already saved via onStateSnapshot. Inform the user
               // and let the panel's Resume affordance take over.
               log(`Review paused: ${e.state.pausedReason ?? '(unknown reason)'}`);
-              vscode.window.showWarningMessage(
-                `Review stopped after a failure. Open the Claude Review panel and click Resume to continue.`,
-                'Open Panel',
-              ).then((pick) => {
-                if (pick === 'Open Panel') vscode.commands.executeCommand('claudeReviewer.showPanel');
-              });
+              const openPanelLabel = tr('notif.openPanel');
+              vscode.window
+                .showWarningMessage(tr('notif.reviewStoppedFailure'), openPanelLabel)
+                .then((pick) => {
+                  if (pick === openPanelLabel) vscode.commands.executeCommand('claudeReviewer.showPanel');
+                });
               return;
             }
             if ((e?.message ?? '').toLowerCase().includes('cancelled')) {
@@ -347,7 +418,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             log(`Review failed: ${e?.stack ?? e?.message ?? e}`);
             bus.emit({ kind: 'log', level: 'error', message: e?.message ?? String(e), at: Date.now() });
-            vscode.window.showErrorMessage(`Claude Review failed: ${e?.message ?? e}`);
+            vscode.window.showErrorMessage(tr('notif.reviewFailed', { error: e?.message ?? String(e) }));
           }
         },
       );
@@ -374,7 +445,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('claudeReviewer.reviewCurrentBranch', () => runReview({})),
     vscode.commands.registerCommand('claudeReviewer.cancelReview', () => {
       if (!currentReviewCts) {
-        vscode.window.showInformationMessage('No review is currently running.');
+        vscode.window.showInformationMessage(tr('notif.noReviewRunning'));
         return;
       }
       cancelCurrentReview();
@@ -382,7 +453,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('claudeReviewer.resumeReview', async () => {
       const partial = loadPartial();
       if (!partial) {
-        vscode.window.showInformationMessage('No paused review to resume.');
+        vscode.window.showInformationMessage(tr('notif.noPausedToResume'));
         return;
       }
       const root = getWorkspaceRoot();
@@ -392,11 +463,11 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('claudeReviewer.retryPass', async (pass?: PassName) => {
       const partial = loadPartial();
       if (!partial) {
-        vscode.window.showInformationMessage('No paused review to retry from.');
+        vscode.window.showInformationMessage(tr('notif.noPausedToRetry'));
         return;
       }
       if (!pass) {
-        vscode.window.showWarningMessage('Pass name required to retry.');
+        vscode.window.showWarningMessage(tr('notif.passNameRequired'));
         return;
       }
       const root = getWorkspaceRoot();
@@ -414,12 +485,13 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('claudeReviewer.discardPartial', async () => {
       const partial = loadPartial();
       if (!partial) return;
+      const discardLabel = tr('notif.discardButton');
       const ok = await vscode.window.showWarningMessage(
-        'Discard the paused review? You will lose its findings and have to start over.',
+        tr('notif.discardPausedConfirm'),
         { modal: true },
-        'Discard',
+        discardLabel,
       );
-      if (ok !== 'Discard') return;
+      if (ok !== discardLabel) return;
       await savePartial(null);
     }),
     vscode.commands.registerCommand('claudeReviewer.reviewChangedFiles', async () => {
@@ -428,7 +500,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (!root) return;
       const git = new GitService(root);
       if (!(await git.isRepo())) {
-        vscode.window.showErrorMessage('Not a git repository.');
+        vscode.window.showErrorMessage(tr('notif.notGitRepoShort'));
         return;
       }
       // Use working-tree diff: head=working tree (empty-string sentinel) vs HEAD
@@ -452,7 +524,7 @@ export async function activate(context: vscode.ExtensionContext) {
         editor.selection = new vscode.Selection(range.start, range.end);
         editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
       } catch (e: any) {
-        vscode.window.showErrorMessage(`Could not open ${finding.file}: ${e?.message ?? e}`);
+        vscode.window.showErrorMessage(tr('notif.couldNotOpen', { file: finding.file, error: e?.message ?? String(e) }));
       }
     }),
     vscode.commands.registerCommand('claudeReviewer.applyFix', async (idOrFinding: string | Finding) => {
@@ -461,7 +533,7 @@ export async function activate(context: vscode.ExtensionContext) {
           ? lastResult?.findings.find((f) => f.id === idOrFinding)
           : idOrFinding;
       if (!finding?.suggestedFix) {
-        vscode.window.showWarningMessage('This finding has no suggested fix.');
+        vscode.window.showWarningMessage(tr('notif.noSuggestedFix'));
         return;
       }
       const root = getWorkspaceRoot();
@@ -471,20 +543,21 @@ export async function activate(context: vscode.ExtensionContext) {
       const startLine = Math.max(0, finding.range.startLine - 1);
       const endLine = Math.max(startLine, finding.range.endLine - 1);
       const range = new vscode.Range(startLine, 0, endLine, doc.lineAt(Math.min(endLine, doc.lineCount - 1)).text.length);
+      const applyLabel = tr('notif.applyButton');
       const ok = await vscode.window.showInformationMessage(
-        `Apply Claude's suggested fix to ${finding.file}:${finding.range.startLine}-${finding.range.endLine}?`,
+        tr('notif.applyFixConfirm', { file: finding.file, start: finding.range.startLine, end: finding.range.endLine }),
         { modal: true },
-        'Apply',
+        applyLabel,
       );
-      if (ok !== 'Apply') return;
+      if (ok !== applyLabel) return;
       const edit = new vscode.WorkspaceEdit();
       edit.replace(fileUri, range, finding.suggestedFix.replacement);
       const applied = await vscode.workspace.applyEdit(edit);
       if (applied) {
         await doc.save();
-        vscode.window.showInformationMessage('Fix applied.');
+        vscode.window.showInformationMessage(tr('notif.fixApplied'));
       } else {
-        vscode.window.showErrorMessage('Could not apply fix.');
+        vscode.window.showErrorMessage(tr('notif.couldNotApplyFix'));
       }
     }),
     vscode.commands.registerCommand('claudeReviewer.dismissFinding', async (idOrFinding: string | Finding) => {
@@ -504,21 +577,26 @@ export async function activate(context: vscode.ExtensionContext) {
       const root = getWorkspaceRoot();
       if (!root) return;
       const question = await vscode.window.showInputBox({
-        prompt: `Follow-up about ${finding.title}`,
-        placeHolder: 'e.g. "Show me how this would fail under concurrent calls."',
+        prompt: tr('notif.followUpPrompt', { title: finding.title }),
+        placeHolder: tr('notif.followUpPlaceholder'),
       });
       if (!question) return;
       const cli = buildCli();
       const cfg = vscode.workspace.getConfiguration('claudeReviewer');
+      const lang = getLang(context);
       await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: 'Asking Claude...', cancellable: true },
+        { location: vscode.ProgressLocation.Notification, title: tr('notif.askingClaude'), cancellable: true },
         async (_p, token) => {
           try {
+            const langInstruction =
+              lang === 'es'
+                ? 'Respond in Spanish (neutral Latin American Spanish).'
+                : 'Respond in English.';
             const prompt = [
               'You previously raised this code-review finding:',
               JSON.stringify(stripFinding(finding), null, 2),
               '',
-              'The reviewer is asking a follow-up question. Answer concisely in markdown:',
+              `The reviewer is asking a follow-up question. ${langInstruction} Answer concisely in markdown:`,
               question,
             ].join('\n');
             const r = await cli.run(prompt, {
@@ -529,20 +607,20 @@ export async function activate(context: vscode.ExtensionContext) {
             });
             const panel = vscode.window.createWebviewPanel(
               'claudeReviewer.followUp',
-              `Follow-up: ${finding.title}`,
+              tr('notif.followUpPanelTitle', { title: finding.title }),
               vscode.ViewColumn.Beside,
               { enableScripts: false },
             );
-            panel.webview.html = `<!doctype html><html><body style="font-family:var(--vscode-font-family);padding:14px;line-height:1.5"><h2>${escapeHtml(finding.title)}</h2><p><b>Your question:</b> ${escapeHtml(question)}</p><hr/><pre style="white-space:pre-wrap">${escapeHtml(r.text)}</pre></body></html>`;
+            panel.webview.html = `<!doctype html><html><body style="font-family:var(--vscode-font-family);padding:14px;line-height:1.5"><h2>${escapeHtml(finding.title)}</h2><p><b>${escapeHtml(tr('notif.yourQuestion'))}</b> ${escapeHtml(question)}</p><hr/><pre style="white-space:pre-wrap">${escapeHtml(r.text)}</pre></body></html>`;
           } catch (e: any) {
-            vscode.window.showErrorMessage(`Follow-up failed: ${e?.message ?? e}`);
+            vscode.window.showErrorMessage(tr('notif.followUpFailed', { error: e?.message ?? String(e) }));
           }
         },
       );
     }),
     vscode.commands.registerCommand('claudeReviewer.exportReport', async () => {
       if (!lastResult) {
-        vscode.window.showInformationMessage('No review to export. Run one first.');
+        vscode.window.showInformationMessage(tr('notif.noReviewToExport'));
         return;
       }
       const root = getWorkspaceRoot();
@@ -552,13 +630,31 @@ export async function activate(context: vscode.ExtensionContext) {
         filters: { Markdown: ['md'] },
       });
       if (!target) return;
-      const md = renderReportMarkdown(lastResult);
+      const md = renderReportMarkdown(lastResult, getLang(context));
       fs.writeFileSync(target.fsPath, md, 'utf8');
-      vscode.window.showInformationMessage(`Report saved: ${target.fsPath}`);
+      vscode.window.showInformationMessage(tr('notif.reportSaved', { path: target.fsPath }));
     }),
     vscode.commands.registerCommand('claudeReviewer.clearCache', async () => {
       await setResult(null);
-      vscode.window.showInformationMessage('Claude Review cache cleared.');
+      vscode.window.showInformationMessage(tr('notif.cacheCleared'));
+    }),
+    vscode.commands.registerCommand('claudeReviewer.setLanguageEn', async () => {
+      await setLang(context, 'en');
+      vscode.window.showInformationMessage(t('notif.languageSwitched', 'en', { lang: t('lang.englishLong', 'en') }));
+    }),
+    vscode.commands.registerCommand('claudeReviewer.setLanguageEs', async () => {
+      await setLang(context, 'es');
+      vscode.window.showInformationMessage(t('notif.languageSwitched', 'es', { lang: t('lang.spanishLong', 'es') }));
+    }),
+  );
+
+  // When the user toggles language, push the change to every surface so the
+  // UI re-renders without needing a window reload.
+  context.subscriptions.push(
+    onDidChangeLanguage((lang) => {
+      statusBar.onLanguageChanged();
+      summaryView.onLanguageChanged();
+      ReviewPanel.currentInstance()?.onLanguageChanged(lang);
     }),
   );
 }
@@ -566,39 +662,54 @@ export async function activate(context: vscode.ExtensionContext) {
 export function deactivate() {}
 
 function stripFinding(f: Finding): any {
-  const { id, dismissed, ...rest } = f;
+  const { id, dismissed, translations, displayLang, originalLang, ...rest } = f;
   return rest;
+}
+
+function extractTranslatedFields(f: Finding): any {
+  return {
+    title: f.title,
+    description: f.description,
+    reasoning: f.reasoning,
+    questionsRaised: f.questionsRaised,
+    alternativesConsidered: f.alternativesConsidered,
+    evidence: f.evidence,
+    suggestedFix: f.suggestedFix
+      ? { description: f.suggestedFix.description, replacement: f.suggestedFix.replacement }
+      : undefined,
+  };
 }
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 }
 
-function renderReportMarkdown(r: ReviewResult): string {
+function renderReportMarkdown(r: ReviewResult, lang: Lang): string {
+  const m = (key: Parameters<typeof t>[0], params?: Record<string, string | number>) => t(key, lang, params);
   const lines: string[] = [];
   const s = r.summary;
-  lines.push(`# Claude Code Review`);
+  lines.push(`# ${m('md.title')}`);
   lines.push('');
-  lines.push(`**Branch:** \`${s.branch}\` vs \`${s.baseBranch}\``);
-  lines.push(`**Verdict:** ${s.overallVerdict}`);
-  lines.push(`**Files changed:** ${s.filesChanged} · **+${s.linesAdded} / -${s.linesRemoved}**`);
-  lines.push(`**Risk score:** ${s.riskScore}/100`);
-  lines.push(`**Passes run:** ${r.passesRun.join(', ')}`);
+  lines.push(`**${m('md.branch')}:** \`${s.branch}\` vs \`${s.baseBranch}\``);
+  lines.push(`**${m('md.verdict')}:** ${s.overallVerdict}`);
+  lines.push(`**${m('md.filesChanged')}:** ${s.filesChanged} · **+${s.linesAdded} / -${s.linesRemoved}**`);
+  lines.push(`**${m('md.riskScore')}:** ${s.riskScore}/100`);
+  lines.push(`**${m('md.passesRun')}:** ${r.passesRun.join(', ')}`);
   lines.push('');
-  lines.push(`## Executive summary`);
+  lines.push(`## ${m('md.executiveSummary')}`);
   lines.push(s.executiveSummary);
   lines.push('');
   if (s.topConcerns.length) {
-    lines.push(`## Top concerns`);
+    lines.push(`## ${m('md.topConcerns')}`);
     for (const c of s.topConcerns) lines.push(`- ${c}`);
     lines.push('');
   }
   if (s.strengths.length) {
-    lines.push(`## Strengths`);
+    lines.push(`## ${m('md.strengths')}`);
     for (const c of s.strengths) lines.push(`- ${c}`);
     lines.push('');
   }
-  lines.push(`## Findings (${r.findings.length})`);
+  lines.push(`## ${m('md.findings')} (${r.findings.length})`);
   for (const f of r.findings) {
     lines.push('');
     lines.push(`### [${f.severity.toUpperCase()}] ${f.title}`);
@@ -607,27 +718,27 @@ function renderReportMarkdown(r: ReviewResult): string {
     lines.push(f.description);
     if (f.reasoning) {
       lines.push('');
-      lines.push(`**Reasoning**`);
+      lines.push(`**${m('md.reasoning')}**`);
       lines.push(f.reasoning);
     }
     if (f.questionsRaised.length) {
       lines.push('');
-      lines.push(`**Questions raised**`);
+      lines.push(`**${m('md.questionsRaised')}**`);
       for (const q of f.questionsRaised) lines.push(`- ${q}`);
     }
     if (f.alternativesConsidered.length) {
       lines.push('');
-      lines.push(`**Alternatives considered**`);
+      lines.push(`**${m('md.alternatives')}**`);
       for (const a of f.alternativesConsidered) lines.push(`- ${a}`);
     }
     if (f.evidence.length) {
       lines.push('');
-      lines.push(`**Evidence**`);
+      lines.push(`**${m('md.evidence')}**`);
       for (const e of f.evidence) lines.push(`> ${e.replace(/\n/g, '\n> ')}`);
     }
     if (f.suggestedFix) {
       lines.push('');
-      lines.push(`**Suggested fix** (confidence: ${f.suggestedFix.confidence})`);
+      lines.push(`**${m('md.suggestedFix', { level: f.suggestedFix.confidence })}**`);
       lines.push(f.suggestedFix.description);
       lines.push('```');
       lines.push(f.suggestedFix.replacement);

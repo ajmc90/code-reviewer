@@ -31,6 +31,21 @@ export interface SuggestedFix {
   confidence: 'high' | 'medium' | 'low';
 }
 
+/**
+ * User-visible string fields of a Finding that can be translated. JSON keys,
+ * file paths, line numbers, severities, etc. are NEVER translated — they're
+ * stable identifiers and contract values.
+ */
+export interface TranslatedFindingFields {
+  title: string;
+  description: string;
+  reasoning: string;
+  questionsRaised: string[];
+  alternativesConsidered: string[];
+  evidence: string[];
+  suggestedFix?: { description: string; replacement: string };
+}
+
 export interface Finding {
   id: string;
   file: string;
@@ -48,6 +63,12 @@ export interface Finding {
   confidence: 'high' | 'medium' | 'low';
   pass: 'explore' | 'critique' | 'permute' | 'security' | 'performance' | 'tests' | 'accessibility' | 'gaps' | 'structural';
   dismissed?: boolean;
+  /** Language in which Claude generated this finding's user-visible text. */
+  originalLang?: 'en' | 'es';
+  /** Lazily-populated translations keyed by target language. Cached forever. */
+  translations?: Partial<Record<'en' | 'es', TranslatedFindingFields>>;
+  /** Per-row language override set by the user via the in-card chip. */
+  displayLang?: 'en' | 'es';
 }
 
 export interface ReviewSummary {
@@ -123,6 +144,8 @@ export interface ReviewOptions {
   depth: ReasoningDepth;
   passes: PassConfig;
   includeUntracked: boolean;
+  /** Language Claude should use for user-visible strings in this review. */
+  lang: 'en' | 'es';
 }
 
 /**

@@ -1,4 +1,5 @@
 import { DiffFile, ProjectContext, ReasoningDepth } from '../types';
+import { Lang } from '../i18n';
 
 const JSON_CONTRACT = `
 You MUST respond with ONLY a single JSON object. No prose, no markdown fences, no preamble.
@@ -44,7 +45,32 @@ Hard rules:
 - praise findings are allowed but use sparingly and only for things truly worth highlighting.
 `.trim();
 
-export function buildSystemPreamble(ctx: ProjectContext, depth: ReasoningDepth): string {
+/**
+ * Output-language directive appended to the system preamble. JSON keys MUST
+ * stay English (contract); only user-visible string VALUES are translated.
+ */
+function languageDirective(lang: Lang): string {
+  if (lang === 'es') {
+    return [
+      '',
+      'Output language:',
+      '- Write ALL user-visible string VALUES in Spanish (neutral Latin American Spanish). This includes: title, description, reasoning, questionsRaised, alternativesConsidered, evidence, executiveSummary, topConcerns, strengths, suggestedFix.description.',
+      '- DO NOT translate JSON KEYS — they are part of the contract and must remain in English.',
+      '- DO NOT translate enum values (severity, category, confidence, overallVerdict).',
+      '- Inside suggestedFix.replacement, the value is CODE. Keep the code verbatim; only translate inline comments if present.',
+      '- Evidence items are quoted diff snippets — keep them verbatim, do NOT translate code.',
+    ].join('\n');
+  }
+  // en — explicit so future locales don't accidentally inherit Spanish.
+  return [
+    '',
+    'Output language:',
+    '- Write all user-visible string values in English.',
+    '- JSON keys stay English (always).',
+  ].join('\n');
+}
+
+export function buildSystemPreamble(ctx: ProjectContext, depth: ReasoningDepth, lang: Lang = 'en'): string {
   const depthInstructions: Record<ReasoningDepth, string> = {
     fast: 'Skim for clear bugs and obvious problems. Skip nits.',
     balanced:
@@ -77,6 +103,7 @@ export function buildSystemPreamble(ctx: ProjectContext, depth: ReasoningDepth):
     '- Acknowledge trade-offs honestly. If your suggestion has a downside, say so.',
     '- Do not nitpick formatting that a formatter would handle.',
     '- Do not invent. If you are not sure, lower confidence and say what you would need to verify.',
+    languageDirective(lang),
   ].join('\n');
 }
 
@@ -90,9 +117,10 @@ export function buildExplorePrompt(args: {
   changedFiles: DiffFile[];
   extraContext?: string;
   structuralRisks?: string[];
+  lang: Lang;
 }): string {
   return [
-    buildSystemPreamble(args.ctx, args.depth),
+    buildSystemPreamble(args.ctx, args.depth, args.lang),
     '',
     `Base branch: ${args.baseBranch}`,
     `Head branch: ${args.headBranch}`,
@@ -121,9 +149,10 @@ export function buildCritiquePrompt(args: {
   depth: ReasoningDepth;
   priorFindingsJson: string;
   diff: string;
+  lang: Lang;
 }): string {
   return [
-    buildSystemPreamble(args.ctx, args.depth),
+    buildSystemPreamble(args.ctx, args.depth, args.lang),
     '',
     '--- PASS 2 — SELF-CRITIQUE ---',
     'Below are findings from pass 1. Your job is to challenge them.',
@@ -154,9 +183,10 @@ export function buildPermutePrompt(args: {
   ctx: ProjectContext;
   depth: ReasoningDepth;
   diff: string;
+  lang: Lang;
 }): string {
   return [
-    buildSystemPreamble(args.ctx, args.depth),
+    buildSystemPreamble(args.ctx, args.depth, args.lang),
     '',
     '--- PASS 3 — PERMUTATION & ALTERNATIVES ---',
     'For each non-trivial change in the diff, produce findings that propose at least one alternative implementation, weighing trade-offs honestly.',
@@ -170,9 +200,9 @@ export function buildPermutePrompt(args: {
   ].join('\n');
 }
 
-export function buildSecurityPrompt(args: { ctx: ProjectContext; diff: string }): string {
+export function buildSecurityPrompt(args: { ctx: ProjectContext; diff: string; lang: Lang }): string {
   return [
-    buildSystemPreamble(args.ctx, 'deep'),
+    buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
     '--- SECURITY PASS ---',
     'Audit ONLY for security concerns: injection (SQL, command, prompt), XSS, SSRF, path traversal, broken auth/authz, secret leakage, unsafe deserialization, weak crypto, missing input validation at trust boundaries, supply-chain risk in new dependencies, race conditions with security impact, insecure defaults.',
@@ -185,9 +215,9 @@ export function buildSecurityPrompt(args: { ctx: ProjectContext; diff: string })
   ].join('\n');
 }
 
-export function buildPerformancePrompt(args: { ctx: ProjectContext; diff: string }): string {
+export function buildPerformancePrompt(args: { ctx: ProjectContext; diff: string; lang: Lang }): string {
   return [
-    buildSystemPreamble(args.ctx, 'deep'),
+    buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
     '--- PERFORMANCE PASS ---',
     'Audit ONLY for performance concerns: hot-loop inefficiencies, N+1 queries, repeated work, unnecessary allocations, blocking I/O on hot paths, missing indexes, cache-busting patterns, accidental quadratic behaviour, large synchronous work in async contexts.',
@@ -200,9 +230,9 @@ export function buildPerformancePrompt(args: { ctx: ProjectContext; diff: string
   ].join('\n');
 }
 
-export function buildAccessibilityPrompt(args: { ctx: ProjectContext; diff: string; uiFiles: string[] }): string {
+export function buildAccessibilityPrompt(args: { ctx: ProjectContext; diff: string; uiFiles: string[]; lang: Lang }): string {
   return [
-    buildSystemPreamble(args.ctx, 'deep'),
+    buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
     '--- ACCESSIBILITY PASS ---',
     'Audit ONLY for accessibility (a11y) concerns. Focus on the UI files touched in the diff:',
@@ -236,10 +266,10 @@ export function buildAccessibilityPrompt(args: { ctx: ProjectContext; diff: stri
   ].join('\n');
 }
 
-export function buildGapsPrompt(args: { ctx: ProjectContext; diff: string; conventions: string; changedFiles: DiffFile[] }): string {
+export function buildGapsPrompt(args: { ctx: ProjectContext; diff: string; conventions: string; changedFiles: DiffFile[]; lang: Lang }): string {
   const fileSummary = args.changedFiles.slice(0, 60).map((f) => `${f.status[0].toUpperCase()} ${f.path}`).join('\n');
   return [
-    buildSystemPreamble(args.ctx, 'deep'),
+    buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
     '--- GAPS PASS ---',
     'Audit ONLY for what is MISSING — things the author probably should have touched but did not. This is the "complete the picture" lens.',
@@ -335,9 +365,9 @@ export function buildContextSection(extraFiles: Array<{ path: string; content: s
   return parts.join('\n');
 }
 
-export function buildTestsPrompt(args: { ctx: ProjectContext; diff: string }): string {
+export function buildTestsPrompt(args: { ctx: ProjectContext; diff: string; lang: Lang }): string {
   return [
-    buildSystemPreamble(args.ctx, 'deep'),
+    buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
     '--- TESTS PASS ---',
     'Audit ONLY for test coverage and quality: missing tests for new logic, tests that assert on implementation details, tests that would still pass if the code under test were deleted, flaky patterns (sleeps, real time, real network), missing edge cases, fixtures that hide bugs.',
@@ -355,9 +385,10 @@ export function buildSummaryPrompt(args: {
   depth: ReasoningDepth;
   allFindingsJson: string;
   diffStat: { filesChanged: number; insertions: number; deletions: number };
+  lang: Lang;
 }): string {
   return [
-    buildSystemPreamble(args.ctx, args.depth),
+    buildSystemPreamble(args.ctx, args.depth, args.lang),
     '',
     '--- FINAL SUMMARY PASS ---',
     'You will be given the consolidated findings from earlier passes. Produce ONLY the summary object (no findings).',

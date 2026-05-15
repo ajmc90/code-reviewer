@@ -3,6 +3,7 @@ import { Finding, PassConfig, ReviewResult, Severity } from '../types';
 import { PassFailureDecision, PassName, ReviewEvent, ReviewEventBus } from '../core/events';
 import { BranchInfo, GitService } from '../git/gitService';
 import { looksLikeSshAuthError, unlockSshKeyInteractive } from '../git/sshAuth';
+import { Lang, messages, t } from '../i18n';
 
 /**
  * Lightweight view of the persisted PartialReviewState. The webview needs to
@@ -28,6 +29,9 @@ export interface ReviewPanelDeps {
   resumeReview: () => void;
   retryPass: (pass: PassName) => void;
   discardPartial: () => void;
+  getLang: () => Lang;
+  setLang: (lang: Lang) => Promise<void>;
+  translateFinding: (id: string, targetLang: Lang) => Promise<void>;
 }
 
 /**
@@ -56,7 +60,7 @@ export class ReviewPanel {
     }
     const panel = vscode.window.createWebviewPanel(
       'claudeReviewer.review',
-      'Claude Review',
+      t('panel.brand', deps.getLang()),
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,
@@ -122,6 +126,10 @@ export class ReviewPanel {
           this.deps.cancelReview();
         } else if (msg?.type === 'aheadBehind' && msg.base && msg.head) {
           await this.computeAheadBehind(String(msg.base), String(msg.head), String(msg.reqId || ''));
+        } else if (msg?.type === 'setLang' && (msg.lang === 'en' || msg.lang === 'es')) {
+          await this.deps.setLang(msg.lang as Lang);
+        } else if (msg?.type === 'translateFinding' && msg.id && (msg.lang === 'en' || msg.lang === 'es')) {
+          await this.deps.translateFinding(String(msg.id), msg.lang as Lang);
         }
       } catch (e: any) {
         this.post({ type: 'branchError', message: e?.message ?? String(e) });
@@ -130,14 +138,15 @@ export class ReviewPanel {
   }
 
   private async refreshBranches() {
+    const lang = this.deps.getLang();
     const git = this.deps.getGit();
     if (!git) {
-      this.post({ type: 'branches', branches: [], remotes: [], defaultBase: null, currentBranch: null, error: 'No workspace open or not a git repository.' });
+      this.post({ type: 'branches', branches: [], remotes: [], defaultBase: null, currentBranch: null, error: t('notif.openFolderFirst', lang) });
       return;
     }
     const isRepo = await git.isRepo();
     if (!isRepo) {
-      this.post({ type: 'branches', branches: [], remotes: [], defaultBase: null, currentBranch: null, error: 'Not a git repository.' });
+      this.post({ type: 'branches', branches: [], remotes: [], defaultBase: null, currentBranch: null, error: t('notif.notGitRepoShort', lang) });
       return;
     }
     const [branches, remotes, defaultBase, currentBranch] = await Promise.all([
@@ -169,7 +178,7 @@ export class ReviewPanel {
       const stderr = String(e?.message ?? '');
       if (!looksLikeSshAuthError(stderr)) throw e;
 
-      this.post({ type: 'fetchPrompt', message: 'SSH key is locked. Asking for passphrase…' });
+      this.post({ type: 'fetchPrompt', message: t('branch.fetchPrompt.ssh', this.deps.getLang()) });
       const r = await unlockSshKeyInteractive(stderr);
       if (r.outcome === 'cancel') {
         throw new Error('SSH unlock cancelled by user.');
@@ -177,7 +186,7 @@ export class ReviewPanel {
       if (r.outcome === 'fail') {
         throw new Error(`SSH unlock failed: ${r.error}`);
       }
-      this.post({ type: 'fetchPrompt', message: 'SSH key unlocked. Retrying fetch…' });
+      this.post({ type: 'fetchPrompt', message: t('branch.fetchPrompt.retry', this.deps.getLang()) });
       return await git.fetchAll({ prune });
     }
   }
@@ -198,6 +207,32 @@ export class ReviewPanel {
     this.post({ type: 'partialSummary', summary });
   }
 
+  /** Re-render the entire panel HTML in the new language and replay state. */
+  onLanguageChanged(lang: Lang) {
+    this.panel.title = t('panel.brand', lang);
+    this.panel.webview.html = this.html();
+    // Replay current state — the webview's 'ready' handshake will re-request
+    // branches/events but result and partialSummary live extension-side.
+    if (this.result) this.post({ type: 'result', result: this.result });
+    this.post({ type: 'partialSummary', summary: this.deps.getPartialSummary() });
+    for (const e of this.bus.snapshot()) this.post({ type: 'event', event: e });
+  }
+
+  /** Apply translation result returned by the extension's on-demand translator. */
+  postFindingTranslation(payload: { id: string; lang: Lang; fields: any }) {
+    this.post({ type: 'findingTranslated', ...payload });
+  }
+
+  /** Notify webview that a translation request is in flight. */
+  postFindingTranslationPending(id: string, targetLang: Lang) {
+    this.post({ type: 'findingTranslationPending', id, targetLang });
+  }
+
+  /** Notify webview that a translation request failed. */
+  postFindingTranslationError(id: string, targetLang: Lang, error: string) {
+    this.post({ type: 'findingTranslationError', id, targetLang, error });
+  }
+
   dispose() {
     this.busSub.dispose();
     this.panel.dispose();
@@ -209,12 +244,17 @@ export class ReviewPanel {
 
   private html(): string {
     const nonce = String(Math.random()).slice(2);
+    const lang: Lang = this.deps.getLang();
+    const tr = (key: Parameters<typeof t>[0], params?: Record<string, string | number>) => t(key, lang, params);
+    const escHtml = (s: string) =>
+      s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+    const trE = (key: Parameters<typeof t>[0], params?: Record<string, string | number>) => escHtml(tr(key, params));
     return /* html */ `<!doctype html>
-<html lang="en">
+<html lang="${lang}">
 <head>
 <meta charset="utf-8" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';" />
-<title>Claude Review</title>
+<title>${trE('panel.brand')}</title>
 <style>
 /* ─────────────────────────────────────────────────────────────────
  * Design tokens — single source of truth for spacing, type, color.
@@ -366,7 +406,62 @@ header{
 .counter[data-sev="nit"]      .swatch{ background: var(--sev-nit) }
 .counter[data-sev="praise"]   .swatch{ background: var(--sev-praise) }
 
-.toolbar{ display:flex; gap:var(--s-1) }
+.toolbar{ display:flex; gap:var(--s-1); align-items:center }
+
+/* Header language toggle — EN/ES segmented control */
+.lang-toggle{
+  display:inline-flex;
+  border:1px solid var(--border);
+  border-radius: var(--r-sm);
+  overflow:hidden;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+.lang-btn{
+  appearance:none;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 0;
+  padding: 3px var(--s-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: inherit;
+  letter-spacing: inherit;
+  font-weight: inherit;
+}
+.lang-btn + .lang-btn{ border-left: 1px solid var(--border) }
+.lang-btn:hover{ background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg) }
+.lang-btn.is-active{ background: var(--accent); color: var(--accent-fg) }
+.lang-btn.is-active:hover{ background: var(--accent-hover) }
+
+/* Per-finding language chip — sits in the card head, lets the user
+   override the global LANG for that one finding via on-demand translation. */
+.lang-chip{
+  appearance:none;
+  display:inline-flex; align-items:center; justify-content:center;
+  min-width: 26px;
+  padding: 0 6px;
+  height: 18px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  cursor: pointer;
+  margin-left: var(--s-1);
+}
+.lang-chip:hover{ background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg) }
+.lang-chip.is-loading{
+  opacity: .7;
+  cursor: progress;
+  font-size: 9px;
+  letter-spacing: 0;
+  text-transform: none;
+}
 
 /* Buttons — single source of truth */
 .btn{
@@ -1219,42 +1314,46 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 <div class="app">
 
   <header role="banner">
-    <div class="brand" aria-label="Claude Review">
+    <div class="brand" aria-label="${trE('panel.brand')}">
       <span class="brand-dot" aria-hidden="true"></span>
-      <span>Claude Review</span>
+      <span>${trE('panel.brand')}</span>
     </div>
     <span id="branches" class="branches-pill" aria-live="polite"></span>
-    <span id="verdict" class="verdict" data-v="idle" role="status" aria-live="polite">IDLE</span>
+    <span id="verdict" class="verdict" data-v="idle" role="status" aria-live="polite">${trE('panel.verdictIdle')}</span>
     <span class="spacer"></span>
-    <div class="counters" role="group" aria-label="Findings by severity">
-      <span class="counter" data-sev="critical" title="Critical findings"><span class="swatch" aria-hidden="true"></span><span class="sr-only">Critical:</span><b id="c-critical">0</b></span>
-      <span class="counter" data-sev="major"    title="Major findings"   ><span class="swatch" aria-hidden="true"></span><span class="sr-only">Major:</span><b id="c-major">0</b></span>
-      <span class="counter" data-sev="minor"    title="Minor findings"   ><span class="swatch" aria-hidden="true"></span><span class="sr-only">Minor:</span><b id="c-minor">0</b></span>
-      <span class="counter" data-sev="nit"      title="Nit findings"     ><span class="swatch" aria-hidden="true"></span><span class="sr-only">Nit:</span><b id="c-nit">0</b></span>
-      <span class="counter" data-sev="praise"   title="Praise"           ><span class="swatch" aria-hidden="true"></span><span class="sr-only">Praise:</span><b id="c-praise">0</b></span>
+    <div class="counters" role="group" aria-label="${trE('panel.findingsBySeverity')}">
+      <span class="counter" data-sev="critical" title="${trE('panel.criticalFindings')}"><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.critical')}:</span><b id="c-critical">0</b></span>
+      <span class="counter" data-sev="major"    title="${trE('panel.majorFindings')}"   ><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.major')}:</span><b id="c-major">0</b></span>
+      <span class="counter" data-sev="minor"    title="${trE('panel.minorFindings')}"   ><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.minor')}:</span><b id="c-minor">0</b></span>
+      <span class="counter" data-sev="nit"      title="${trE('panel.nitFindings')}"     ><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.nit')}:</span><b id="c-nit">0</b></span>
+      <span class="counter" data-sev="praise"   title="${trE('panel.praiseFindings')}"  ><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.praise')}:</span><b id="c-praise">0</b></span>
     </div>
     <div class="toolbar">
-      <button class="btn btn--ghost btn--xs" id="btn-export" type="button" aria-label="Export review as Markdown">Export</button>
+      <div class="lang-toggle" role="group" aria-label="${trE('lang.toggleAria')}">
+        <button class="lang-btn${lang === 'en' ? ' is-active' : ''}" type="button" data-lang="en" aria-pressed="${lang === 'en'}">${trE('lang.en')}</button>
+        <button class="lang-btn${lang === 'es' ? ' is-active' : ''}" type="button" data-lang="es" aria-pressed="${lang === 'es'}">${trE('lang.es')}</button>
+      </div>
+      <button class="btn btn--ghost btn--xs" id="btn-export" type="button" aria-label="${trE('panel.exportAria')}">${trE('panel.export')}</button>
     </div>
   </header>
 
   <main id="main">
-    <aside class="left" aria-label="Review controls">
+    <aside class="left" aria-label="${trE('panel.reviewControls')}">
 
-      <button class="collapse-btn" id="btn-collapse" type="button" aria-label="Collapse panel" title="Collapse panel (⌘\\)">
+      <button class="collapse-btn" id="btn-collapse" type="button" aria-label="${trE('panel.collapse')}" title="${trE('panel.collapseTitle')}">
         <span id="collapse-icon" aria-hidden="true">‹</span>
       </button>
 
-      <div class="left-rail" id="left-rail" aria-hidden="true" aria-label="Collapsed summary">
-        <span class="rail-dot" id="rail-dot" data-state="idle" title="Status"></span>
+      <div class="left-rail" id="left-rail" aria-hidden="true" aria-label="${trE('panel.collapsedSummary')}">
+        <span class="rail-dot" id="rail-dot" data-state="idle" title="${trE('panel.statusTitle')}"></span>
         <div class="rail-vert" id="rail-branches" title=""></div>
-        <div class="rail-vert" id="rail-pass" title="Current pass"></div>
+        <div class="rail-vert" id="rail-pass" title="${trE('panel.currentPass')}"></div>
         <div class="rail-spinner" id="rail-spinner" aria-hidden="true"></div>
         <div class="rail-stats" id="rail-stats">
-          <div class="rail-stat" data-sev="critical" title="Critical"><b id="rail-c-critical">0</b><span>crit</span></div>
-          <div class="rail-stat" data-sev="major" title="Major"><b id="rail-c-major">0</b><span>maj</span></div>
-          <div class="rail-stat" data-sev="minor" title="Minor"><b id="rail-c-minor">0</b><span>min</span></div>
-          <div class="rail-stat" data-sev="nit" title="Nit"><b id="rail-c-nit">0</b><span>nit</span></div>
+          <div class="rail-stat" data-sev="critical" title="${trE('panel.critical')}"><b id="rail-c-critical">0</b><span>crit</span></div>
+          <div class="rail-stat" data-sev="major" title="${trE('panel.major')}"><b id="rail-c-major">0</b><span>maj</span></div>
+          <div class="rail-stat" data-sev="minor" title="${trE('panel.minor')}"><b id="rail-c-minor">0</b><span>min</span></div>
+          <div class="rail-stat" data-sev="nit" title="${trE('panel.nit')}"><b id="rail-c-nit">0</b><span>nit</span></div>
         </div>
       </div>
 
@@ -1263,55 +1362,55 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
         <div class="resume-banner" id="resume-banner" role="alert">
           <span class="ico" aria-hidden="true">⏸</span>
           <div class="text">
-            <h3 id="resume-banner-title">Paused review available</h3>
+            <h3 id="resume-banner-title">${trE('panel.pausedTitle')}</h3>
             <p id="resume-banner-detail"></p>
           </div>
           <div class="actions">
-            <button class="primary" type="button" id="btn-resume">Resume</button>
-            <button type="button" id="btn-discard-partial" title="Throw away the partial review">Discard</button>
+            <button class="primary" type="button" id="btn-resume">${trE('panel.resume')}</button>
+            <button type="button" id="btn-discard-partial" title="${trE('panel.discardTitle')}">${trE('panel.discard')}</button>
           </div>
         </div>
 
         <section class="section" aria-labelledby="branch-picker-title">
-          <h2 class="section-title" id="branch-picker-title">Branch picker</h2>
-          <div class="picker" role="group" aria-label="Choose base and head branches">
+          <h2 class="section-title" id="branch-picker-title">${trE('panel.branchPicker')}</h2>
+          <div class="picker" role="group" aria-label="${trE('panel.chooseBaseHead')}">
 
             <div class="picker-row">
-              <label class="sr-only" for="branch-filter">Filter branches</label>
+              <label class="sr-only" for="branch-filter">${trE('panel.filterBranches')}</label>
               <input
                 class="search"
                 id="branch-filter"
                 type="search"
-                placeholder="Filter by name, author, message…"
+                placeholder="${trE('panel.branchFilterPlaceholder')}"
                 autocomplete="off"
                 spellcheck="false"
               />
-              <button class="btn btn--ghost btn--xs" id="btn-fetch" type="button" title="git fetch --all --tags --prune" aria-label="Fetch all remotes">
-                <span aria-hidden="true">⟳</span> Fetch
+              <button class="btn btn--ghost btn--xs" id="btn-fetch" type="button" title="${trE('panel.fetchTitle')}" aria-label="${trE('panel.fetchAria')}">
+                <span aria-hidden="true">⟳</span> ${trE('panel.fetch')}
               </button>
             </div>
 
             <div class="picker-row">
-              <label class="checkpill"><input type="checkbox" id="show-local" checked> local</label>
-              <label class="checkpill"><input type="checkbox" id="show-remote" checked> remote</label>
+              <label class="checkpill"><input type="checkbox" id="show-local" checked> ${trE('panel.local')}</label>
+              <label class="checkpill"><input type="checkbox" id="show-remote" checked> ${trE('panel.remote')}</label>
               <span class="picker-meta" id="branches-meta" aria-live="polite"></span>
             </div>
 
             <div class="picker-cols">
               <div class="picker-col">
-                <div class="picker-col-head"><span class="role">Base</span><span class="hint" id="base-current"></span></div>
-                <div class="branch-list" id="base-list" role="listbox" aria-label="Base branch" tabindex="0"></div>
+                <div class="picker-col-head"><span class="role">${trE('panel.base')}</span><span class="hint" id="base-current"></span></div>
+                <div class="branch-list" id="base-list" role="listbox" aria-label="${trE('panel.baseAria')}" tabindex="0"></div>
               </div>
               <div class="picker-col">
-                <div class="picker-col-head"><span class="role">Head</span><span class="hint" id="head-current"></span></div>
-                <div class="branch-list" id="head-list" role="listbox" aria-label="Head branch" tabindex="0"></div>
+                <div class="picker-col-head"><span class="role">${trE('panel.head')}</span><span class="hint" id="head-current"></span></div>
+                <div class="branch-list" id="head-list" role="listbox" aria-label="${trE('panel.headAria')}" tabindex="0"></div>
               </div>
             </div>
 
             <div class="picker-actions">
               <span class="ab-pill" id="ab-pill" aria-live="polite"></span>
               <button class="btn btn--primary" id="btn-start" type="button" aria-disabled="true">
-                <span aria-hidden="true">▶</span> Start review
+                <span aria-hidden="true">▶</span> ${trE('panel.startReview')}
               </button>
             </div>
 
@@ -1321,66 +1420,63 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 
         <section class="section" aria-labelledby="passes-title">
           <div class="passes-head">
-            <h2 class="section-title" id="passes-title">Analysis passes <span class="passes-count" id="passes-count"></span></h2>
+            <h2 class="section-title" id="passes-title">${trE('panel.analysisPasses')} <span class="passes-count" id="passes-count"></span></h2>
             <div class="passes-actions">
-              <button type="button" class="link" id="btn-passes-all" title="Select every pass">All</button>
-              <button type="button" class="link" id="btn-passes-none" title="Deselect every pass">None</button>
+              <button type="button" class="link" id="btn-passes-all" title="${trE('panel.selectAllTitle')}">${trE('panel.selectAll')}</button>
+              <button type="button" class="link" id="btn-passes-none" title="${trE('panel.selectNoneTitle')}">${trE('panel.selectNone')}</button>
             </div>
           </div>
-          <div class="passes" id="passes" role="group" aria-label="Choose which analysis passes to run"></div>
+          <div class="passes" id="passes" role="group" aria-label="${trE('panel.choosePasses')}"></div>
         </section>
 
         <section class="section" aria-labelledby="activity-title">
-          <h2 class="section-title" id="activity-title">Live activity</h2>
+          <h2 class="section-title" id="activity-title">${trE('panel.liveActivity')}</h2>
           <div class="timeline" id="timeline" aria-live="polite"></div>
         </section>
 
         <section class="section" aria-labelledby="log-title">
           <div class="log-header">
-            <h2 class="section-title" id="log-title">Log <span class="log-count" id="log-count"></span></h2>
-            <button class="btn btn--ghost btn--xs" id="btn-copy-log" type="button" aria-label="Copy log to clipboard">Copy</button>
-            <button class="btn btn--ghost btn--xs" id="btn-clear-log" type="button" aria-label="Clear log">Clear</button>
+            <h2 class="section-title" id="log-title">${trE('panel.log')} <span class="log-count" id="log-count"></span></h2>
+            <button class="btn btn--ghost btn--xs" id="btn-copy-log" type="button" aria-label="${trE('panel.copyLogAria')}">${trE('panel.copy')}</button>
+            <button class="btn btn--ghost btn--xs" id="btn-clear-log" type="button" aria-label="${trE('panel.clearLogAria')}">${trE('panel.clear')}</button>
           </div>
-          <div class="live empty" id="live" role="log" aria-live="polite" aria-label="Review log">No activity yet. Pick branches and click Start to begin.</div>
+          <div class="live empty" id="live" role="log" aria-live="polite" aria-label="${trE('panel.reviewLog')}">${trE('panel.noActivity')}</div>
         </section>
 
       </div>
 
     </aside>
 
-    <div class="gutter" id="gutter" role="separator" aria-orientation="vertical" aria-label="Resize panel" tabindex="0" aria-valuemin="280" aria-valuemax="720" aria-valuenow="420"></div>
+    <div class="gutter" id="gutter" role="separator" aria-orientation="vertical" aria-label="${trE('panel.resize')}" tabindex="0" aria-valuemin="280" aria-valuemax="720" aria-valuenow="420"></div>
 
-    <section class="right" aria-label="Review results">
+    <section class="right" aria-label="${trE('panel.reviewResults')}">
       <div id="exec" class="exec" hidden>
-        <h2>Executive summary</h2>
+        <h2>${trE('panel.execSummary')}</h2>
         <p id="exec-text"></p>
       </div>
 
       <div class="bullets" id="bullets" hidden>
-        <div class="card"><h3>Top concerns</h3><ul id="concerns"></ul></div>
-        <div class="card"><h3>Strengths</h3><ul id="strengths"></ul></div>
+        <div class="card"><h3>${trE('panel.topConcerns')}</h3><ul id="concerns"></ul></div>
+        <div class="card"><h3>${trE('panel.strengths')}</h3><ul id="strengths"></ul></div>
       </div>
 
       <div class="filters-wrap">
-        <div class="filters" role="group" aria-label="Filter findings by severity">
-          <button class="filter" type="button" data-f="all" aria-pressed="true">All</button>
-          <button class="filter" type="button" data-f="critical" aria-pressed="false">Critical</button>
-          <button class="filter" type="button" data-f="major" aria-pressed="false">Major</button>
-          <button class="filter" type="button" data-f="minor" aria-pressed="false">Minor</button>
-          <button class="filter" type="button" data-f="nit" aria-pressed="false">Nit</button>
-          <button class="filter" type="button" data-f="praise" aria-pressed="false">Praise</button>
-          <label class="sr-only" for="search">Filter findings by text</label>
-          <input class="search" id="search" type="search" placeholder="Filter findings by file, title, category…" autocomplete="off" spellcheck="false" />
+        <div class="filters" role="group" aria-label="${trE('panel.filterBySeverity')}">
+          <button class="filter" type="button" data-f="all" aria-pressed="true">${trE('panel.filterAll')}</button>
+          <button class="filter" type="button" data-f="critical" aria-pressed="false">${trE('panel.critical')}</button>
+          <button class="filter" type="button" data-f="major" aria-pressed="false">${trE('panel.major')}</button>
+          <button class="filter" type="button" data-f="minor" aria-pressed="false">${trE('panel.minor')}</button>
+          <button class="filter" type="button" data-f="nit" aria-pressed="false">${trE('panel.nit')}</button>
+          <button class="filter" type="button" data-f="praise" aria-pressed="false">${trE('panel.praise')}</button>
+          <label class="sr-only" for="search">${trE('panel.filterByText')}</label>
+          <input class="search" id="search" type="search" placeholder="${trE('panel.findingsSearchPlaceholder')}" autocomplete="off" spellcheck="false" />
         </div>
-        <div class="filters-cat" id="cat-filters" role="group" aria-label="Filter findings by category"></div>
+        <div class="filters-cat" id="cat-filters" role="group" aria-label="${trE('panel.filterByCategory')}"></div>
       </div>
 
-      <div id="findings" class="findings" role="region" aria-label="Findings"></div>
+      <div id="findings" class="findings" role="region" aria-label="${trE('panel.findingsRegion')}"></div>
 
-      <div id="empty" class="empty-state">
-        Run a review with <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>R</kbd> (or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>R</kbd>).<br />
-        Live activity will stream here.
-      </div>
+      <div id="empty" class="empty-state">${tr('panel.emptyState')}</div>
     </section>
   </main>
 
@@ -1392,17 +1488,36 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   const $  = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
 
+  // ─── i18n ───────────────────────────────────────────────────
+  // The host injects the whole dictionary so the webview can render
+  // dynamic content (passes, findings, statuses) in the active language
+  // without round-tripping each label.
+  const MESSAGES = ${JSON.stringify(messages)};
+  let LANG = ${JSON.stringify(lang)};
+  function tMsg(key, params){
+    const dict = MESSAGES[LANG] || MESSAGES.en;
+    const tmpl = (dict && dict[key]) || (MESSAGES.en && MESSAGES.en[key]) || key;
+    if (!params) return tmpl;
+    return String(tmpl).replace(/\\{(\\w+)\\}/g, (_, k) => {
+      const v = params[k];
+      return v === undefined || v === null ? '' : String(v);
+    });
+  }
+
+  // PASS_DEFS keeps stable keys; labels/hints come from i18n at render time.
   const PASS_DEFS = [
-    { key: 'structural',    label: 'Structural exploration', hint: 'Surveys the diff to scope work' },
-    { key: 'explore',       label: 'Exploration',             hint: 'Open-ended issue discovery' },
-    { key: 'security',      label: 'Security',                hint: 'Authn/z, injection, secrets, crypto' },
-    { key: 'performance',   label: 'Performance',             hint: 'Hot paths, allocations, async waits' },
-    { key: 'accessibility', label: 'Accessibility',           hint: 'A11y for UI changes (WCAG / ARIA)' },
-    { key: 'tests',         label: 'Tests',                   hint: 'Coverage gaps, brittle assertions' },
-    { key: 'gaps',          label: 'Gaps',                    hint: 'Missing pieces / edge cases' },
-    { key: 'permute',       label: 'Alternatives',            hint: 'Other approaches to consider' },
-    { key: 'critique',      label: 'Self-critique',           hint: 'Final QA over earlier findings' },
+    { key: 'structural'    },
+    { key: 'explore'       },
+    { key: 'security'      },
+    { key: 'performance'   },
+    { key: 'accessibility' },
+    { key: 'tests'         },
+    { key: 'gaps'          },
+    { key: 'permute'       },
+    { key: 'critique'      },
   ];
+  function passLabel(key){ return tMsg('pass.' + key + '.label'); }
+  function passHint(key){  return tMsg('pass.' + key + '.hint');  }
   const PASS_KEY_SET = new Set(PASS_DEFS.map(p => p.key));
 
   const CATEGORY_DEFS = [
@@ -1446,20 +1561,9 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     });
   }
 
-  const PASS_LABEL = {
-    context:      'Project context',
-    diff:         'Git diff',
-    structural:   'Pass 0 — Structural exploration',
-    explore:      'Pass 1 — Exploration',
-    security:     'Pass — Security',
-    performance:  'Pass — Performance',
-    accessibility:'Pass — Accessibility',
-    tests:        'Pass — Tests',
-    gaps:         'Pass — Gaps (missing pieces)',
-    permute:      'Pass — Alternatives',
-    critique:     'Pass — Self-critique',
-    summary:      'Final summary',
-  };
+  function passLabelLong(pass){
+    return tMsg('timeline.' + pass);
+  }
 
   // ─── utilities ──────────────────────────────────────────────
   function esc(s){
@@ -1508,7 +1612,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     const list = filterBranches();
     const selected = role==='base' ? state.selectedBase : state.selectedHead;
     if (list.length === 0){
-      rootEl.innerHTML = '<div class="branch-empty">No branches match.</div>';
+      rootEl.innerHTML = '<div class="branch-empty">'+esc(tMsg('branch.noMatch'))+'</div>';
       return;
     }
     for (const b of list){
@@ -1549,15 +1653,17 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   function renderAB(){
     const pill = $('#ab-pill');
     if (!state.selectedBase || !state.selectedHead){ pill.textContent = ''; return; }
-    if (state.selectedBase === state.selectedHead){ pill.innerHTML = '<span class="same">same branch</span>'; return; }
+    if (state.selectedBase === state.selectedHead){ pill.innerHTML = '<span class="same">'+esc(tMsg('branch.sameBranch'))+'</span>'; return; }
     const r = state.abResult;
     if (!r){ pill.textContent = '…'; return; }
-    pill.innerHTML = '<span class="ahead">'+r.ahead+' ahead</span> · <span class="behind">'+r.behind+' behind</span>';
+    pill.innerHTML = '<span class="ahead">'+esc(tMsg('branch.ahead', {n: r.ahead}))+'</span> · <span class="behind">'+esc(tMsg('branch.behind', {n: r.behind}))+'</span>';
   }
   function renderBranchPicker(){
-    $('#base-current').textContent = state.defaultBase ? '(default: '+state.defaultBase+')' : '';
-    $('#head-current').textContent = state.currentBranch ? '(current: '+state.currentBranch+')' : '';
-    $('#branches-meta').textContent = state.branches.length + ' branches' + (state.remotes.length ? ' · '+state.remotes.length+' remotes' : '');
+    $('#base-current').textContent = state.defaultBase ? tMsg('branch.default', {name: state.defaultBase}) : '';
+    $('#head-current').textContent = state.currentBranch ? tMsg('branch.current', {name: state.currentBranch}) : '';
+    $('#branches-meta').textContent = state.remotes.length
+      ? tMsg('branch.countWithRemotes', {count: state.branches.length, remotes: state.remotes.length})
+      : tMsg('branch.count', {count: state.branches.length});
     renderBranchList($('#base-list'), 'base');
     renderBranchList($('#head-list'), 'head');
     const passActive = Object.values(state.passes).some(Boolean);
@@ -1569,22 +1675,23 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     startBtn.classList.toggle('btn--danger', state.isRunning);
     startBtn.setAttribute('aria-disabled', state.isRunning ? 'false' : (ok ? 'false' : 'true'));
     if (state.isRunning){
-      startBtn.innerHTML = '<span aria-hidden="true">■</span> Stop review';
-      startBtn.setAttribute('aria-label', 'Stop running review');
-      startBtn.title = 'Cancel the in-progress review';
+      startBtn.innerHTML = '<span aria-hidden="true">■</span> '+esc(tMsg('branch.stopReview').replace(/^.\s*/, ''));
+      startBtn.setAttribute('aria-label', tMsg('branch.stopRunningAria'));
+      startBtn.title = tMsg('branch.cancelInProgress');
     } else if (!passActive){
-      startBtn.innerHTML = '<span aria-hidden="true">▶</span> Pick at least one pass';
-      startBtn.setAttribute('aria-label', 'Select at least one analysis pass first');
+      startBtn.innerHTML = '<span aria-hidden="true">▶</span> '+esc(tMsg('branch.pickPassFirst').replace(/^.\s*/, ''));
+      startBtn.setAttribute('aria-label', tMsg('branch.pickPassFirstAria'));
     } else if (state.selectedHead && state.selectedBase && state.selectedHead !== state.selectedBase){
-      startBtn.innerHTML =
-        '<span aria-hidden="true">▶</span> Review ' +
-        '<span class="branch-ref" title="'+escAttr(state.selectedHead)+'">'+esc(state.selectedHead)+'</span>' +
-        ' vs ' +
-        '<span class="branch-ref" title="'+escAttr(state.selectedBase)+'">'+esc(state.selectedBase)+'</span>';
-      startBtn.setAttribute('aria-label', 'Review '+state.selectedHead+' versus '+state.selectedBase);
+      const tpl = tMsg('branch.reviewVs', {head: '__HEAD__', base: '__BASE__'});
+      const html = '<span aria-hidden="true">▶</span> ' +
+        esc(tpl.replace(/^.\s*/, ''))
+          .replace('__HEAD__', '<span class="branch-ref" title="'+escAttr(state.selectedHead)+'">'+esc(state.selectedHead)+'</span>')
+          .replace('__BASE__', '<span class="branch-ref" title="'+escAttr(state.selectedBase)+'">'+esc(state.selectedBase)+'</span>');
+      startBtn.innerHTML = html;
+      startBtn.setAttribute('aria-label', tMsg('branch.reviewVsAria', {head: state.selectedHead, base: state.selectedBase}));
     } else {
-      startBtn.innerHTML = '<span aria-hidden="true">▶</span> Pick base &amp; head';
-      startBtn.setAttribute('aria-label', 'Pick base and head branches first');
+      startBtn.innerHTML = '<span aria-hidden="true">▶</span> '+esc(tMsg('branch.pickBaseHead').replace(/^.\s*/, ''));
+      startBtn.setAttribute('aria-label', tMsg('branch.pickBaseHeadAria'));
     }
     renderAB();
     if (state.leftCollapsed) renderRail();
@@ -1625,7 +1732,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   function renderTimeline(){
     const root = $('#timeline'); root.innerHTML='';
     if (state.steps.size === 0){
-      root.innerHTML = '<div class="timeline-empty">Waiting for review to start…</div>';
+      root.innerHTML = '<div class="timeline-empty">'+esc(tMsg('timeline.empty'))+'</div>';
       return;
     }
     const now = Date.now();
@@ -1640,7 +1747,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
         : info.status==='awaitDecision' ? '⚠'
         : info.status==='skipped' ? '–'
         : '·';
-      const label = PASS_LABEL[pass] || pass;
+      const label = passLabelLong(pass);
       let elapsed = '';
       if (info.startedAt){
         const end = info.endedAt || now;
@@ -1654,7 +1761,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
         '<div class="ico" aria-hidden="true">'+ icon +'</div>' +
         '<div class="body">' +
           '<div class="label"><span>'+esc(label)+'</span><span class="elapsed">'+esc(elapsed)+'</span></div>' +
-          '<div class="meta">'+esc(info.detail || (info.status==='running' ? 'Working…' : ''))+'</div>' +
+          '<div class="meta">'+esc(info.detail || (info.status==='running' ? tMsg('timeline.working') : ''))+'</div>' +
           activity +
           actions +
         '</div>';
@@ -1676,13 +1783,14 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     }
     const p = state.partial;
     const remaining = totalPassCount() - p.completedPasses.length - p.skippedPasses.length;
-    $('#resume-banner-title').textContent =
-      'Paused review of ' + p.headBranch + ' vs ' + p.baseBranch;
-    const reason = p.pausedReason ? p.pausedReason : 'review was stopped';
-    const summary = p.completedPasses.length + ' completed · '
-      + p.skippedPasses.length + ' skipped · '
-      + Math.max(0, remaining) + ' pending · '
-      + p.findingCount + ' findings so far';
+    $('#resume-banner-title').textContent = tMsg('resume.title', {head: p.headBranch, base: p.baseBranch});
+    const reason = p.pausedReason ? p.pausedReason : tMsg('resume.reasonDefault');
+    const summary = tMsg('resume.summary', {
+      completed: p.completedPasses.length,
+      skipped: p.skippedPasses.length,
+      pending: Math.max(0, remaining),
+      findings: p.findingCount,
+    });
     $('#resume-banner-detail').textContent = summary + ' — ' + reason;
     el.setAttribute('data-visible', '1');
   }
@@ -1700,10 +1808,10 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     if (info.status === 'awaitDecision'){
       // Orchestrator is parked waiting for our verdict.
       return ''
-        + '<div class="actions" role="group" aria-label="Decide what to do with the failed pass">'
-        +   '<button class="primary" type="button" data-decision="retry" data-pass="'+escAttr(pass)+'">↻ Retry</button>'
-        +   '<button type="button" data-decision="skip" data-pass="'+escAttr(pass)+'">⤼ Skip</button>'
-        +   '<button class="danger" type="button" data-decision="stop" data-pass="'+escAttr(pass)+'">■ Stop</button>'
+        + '<div class="actions" role="group">'
+        +   '<button class="primary" type="button" data-decision="retry" data-pass="'+escAttr(pass)+'">'+esc(tMsg('timeline.retry'))+'</button>'
+        +   '<button type="button" data-decision="skip" data-pass="'+escAttr(pass)+'">'+esc(tMsg('timeline.skip'))+'</button>'
+        +   '<button class="danger" type="button" data-decision="stop" data-pass="'+escAttr(pass)+'">'+esc(tMsg('timeline.stop'))+'</button>'
         + '</div>';
     }
     // After the review halted, offer per-step Retry on anything that didn't
@@ -1712,7 +1820,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     if (!state.isRunning && state.partial && (info.status === 'error' || info.status === 'skipped')){
       return ''
         + '<div class="actions">'
-        +   '<button class="primary" type="button" data-retry-pass="'+escAttr(pass)+'">↻ Retry this pass</button>'
+        +   '<button class="primary" type="button" data-retry-pass="'+escAttr(pass)+'">'+esc(tMsg('timeline.retryPass'))+'</button>'
         + '</div>';
     }
     return '';
@@ -1738,7 +1846,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   function clearLive(){
     const live = $('#live');
     live.classList.add('empty');
-    live.innerHTML = 'Log cleared.';
+    live.innerHTML = esc(tMsg('log.cleared'));
     liveLineCount = 0;
     $('#log-count').textContent = '';
   }
@@ -1808,57 +1916,127 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     if (filtered.length === 0){
       empty.hidden = false;
       empty.textContent = state.result
-        ? (state.findings.length ? 'No findings match your filter.' : 'Clean review — no findings.')
+        ? (state.findings.length ? tMsg('panel.noMatch') : tMsg('panel.cleanReview'))
         : '';
       if (!state.result){
-        empty.innerHTML = 'Run a review with <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>R</kbd> (or <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>R</kbd>).<br>Live activity will stream here.';
+        empty.innerHTML = tMsg('panel.emptyState');
       }
       return;
     }
     empty.hidden = true;
     for (const f of filtered){
-      const card = document.createElement('article');
-      card.className = 'finding';
-      card.dataset.id = f.id;
-      card.dataset.severity = f.severity || 'minor';
-      card.setAttribute('aria-expanded', 'false');
-      const sev = f.severity || 'minor';
-      const fix = f.suggestedFix;
-      const locLabel = esc(f.file)+':'+f.range.startLine+(f.range.endLine!==f.range.startLine?'-'+f.range.endLine:'');
-      card.innerHTML =
-        '<div class="finding-head" role="button" tabindex="0" data-toggle="'+escAttr(f.id)+'" aria-controls="body-'+escAttr(f.id)+'" aria-label="'+escAttr(sev+': '+f.title)+'">' +
-          '<svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6 4l4 4-4 4z"/></svg>' +
-          '<span class="sev" data-sev="'+escAttr(sev)+'">'+esc(sev)+'</span>' +
-          '<span class="cat">'+esc(f.category||'other')+'</span>' +
-          '<span class="title">'+esc(f.title||'')+'</span>' +
-          '<span class="loc" role="button" tabindex="0" data-open="'+escAttr(f.id)+'" aria-label="Jump to '+escAttr(locLabel)+'">'+locLabel+'</span>' +
-          '<span class="conf">'+esc(f.confidence||'')+'</span>' +
-        '</div>' +
-        '<div class="finding-body" id="body-'+escAttr(f.id)+'">' +
-          '<div class="grid2">' +
-            '<div class="col">' +
-              '<h4><span aria-hidden="true">🔍</span> Problem</h4>' +
-              '<p>'+esc(f.description||'')+'</p>' +
-              (f.reasoning ? '<h4><span aria-hidden="true">🧠</span> Reasoning</h4><p>'+esc(f.reasoning)+'</p>' : '') +
-              (f.questionsRaised && f.questionsRaised.length ? '<h4><span aria-hidden="true">❓</span> Questions Claude asked</h4><ul class="qa">'+f.questionsRaised.map(q=>'<li>'+esc(q)+'</li>').join('')+'</ul>' : '') +
-              (f.evidence && f.evidence.length ? '<h4><span aria-hidden="true">📎</span> Evidence</h4>'+f.evidence.map(e=>'<div class="evidence">'+esc(e)+'</div>').join('') : '') +
-            '</div>' +
-            '<div class="col">' +
-              '<h4><span aria-hidden="true">🛠</span> Solution</h4>' +
-              (fix ? '<p>'+esc(fix.description||'')+'</p><pre class="fix">'+esc(fix.replacement||'')+'</pre><div class="fix-conf">Fix confidence: '+esc(fix.confidence||'')+'</div>' : '<p style="color:var(--fg-subtle)">No automatic fix proposed.</p>') +
-              (f.alternativesConsidered && f.alternativesConsidered.length ? '<h4><span aria-hidden="true">🔀</span> Alternatives considered</h4><ul class="qa">'+f.alternativesConsidered.map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul>' : '') +
-              (f.relatedFiles && f.relatedFiles.length ? '<h4><span aria-hidden="true">🔗</span> Related files</h4><ul class="qa">'+f.relatedFiles.map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul>' : '') +
-            '</div>' +
-          '</div>' +
-          '<div class="actions">' +
-            '<button class="btn btn--xs" type="button" data-act="open" data-id="'+escAttr(f.id)+'">Jump to code</button>' +
-            (fix ? '<button class="btn btn--xs" type="button" data-act="apply" data-id="'+escAttr(f.id)+'">Apply fix</button>' : '') +
-            '<button class="btn btn--ghost btn--xs" type="button" data-act="ask" data-id="'+escAttr(f.id)+'">Ask follow-up</button>' +
-            '<button class="btn btn--ghost btn--xs" type="button" data-act="dismiss" data-id="'+escAttr(f.id)+'">Dismiss</button>' +
-          '</div>' +
-        '</div>';
-      root.appendChild(card);
+      root.appendChild(buildFindingCard(f));
     }
+  }
+
+  // Compute which language a finding's text is currently shown in.
+  // Per-row displayLang (set via the in-card chip) wins; otherwise the
+  // global LANG. Falls back to originalLang when no translation is cached yet.
+  function effectiveFindingLang(f){
+    const target = f.displayLang || LANG;
+    const orig = f.originalLang || 'en';
+    if (target === orig) return orig;
+    if (f.translations && f.translations[target]) return target;
+    return orig;
+  }
+
+  // Return the displayed string for one of a finding's translatable fields.
+  function pickField(f, field){
+    const target = f.displayLang || LANG;
+    const orig = f.originalLang || 'en';
+    if (target !== orig && f.translations && f.translations[target]) {
+      const tr = f.translations[target];
+      const v = tr[field];
+      if (v !== undefined && v !== null) return v;
+    }
+    return f[field];
+  }
+
+  function buildFindingCard(f){
+    const card = document.createElement('article');
+    card.className = 'finding';
+    card.dataset.id = f.id;
+    card.dataset.severity = f.severity || 'minor';
+    card.setAttribute('aria-expanded', 'false');
+    const sev = f.severity || 'minor';
+    const fix = f.suggestedFix;
+    // Use translated field accessors so per-row chip and global toggle both work.
+    const title = pickField(f, 'title') || '';
+    const description = pickField(f, 'description') || '';
+    const reasoning = pickField(f, 'reasoning') || '';
+    const questionsRaised = pickField(f, 'questionsRaised') || [];
+    const evidence = pickField(f, 'evidence') || [];
+    const alternativesConsidered = pickField(f, 'alternativesConsidered') || [];
+    // Translated fix fields when available; the code in suggestedFix.replacement
+    // and structural fields like range/confidence are not translated.
+    const fixTranslated = (() => {
+      if (!fix) return null;
+      const target = f.displayLang || LANG;
+      const orig = f.originalLang || 'en';
+      if (target !== orig && f.translations && f.translations[target] && f.translations[target].suggestedFix) {
+        return f.translations[target].suggestedFix;
+      }
+      return { description: fix.description, replacement: fix.replacement };
+    })();
+    const showingLang = effectiveFindingLang(f);
+    const otherLang = showingLang === 'es' ? 'en' : 'es';
+    const otherLangLabel = tMsg('lang.' + otherLang);
+    const otherLangFull = tMsg(otherLang === 'es' ? 'lang.spanishLong' : 'lang.englishLong');
+    const isTranslating = !!f._translating;
+    const locLabel = esc(f.file)+':'+f.range.startLine+(f.range.endLine!==f.range.startLine?'-'+f.range.endLine:'');
+    card.innerHTML =
+      '<div class="finding-head" role="button" tabindex="0" data-toggle="'+escAttr(f.id)+'" aria-controls="body-'+escAttr(f.id)+'" aria-label="'+escAttr(sev+': '+title)+'">' +
+        '<svg class="chevron" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M6 4l4 4-4 4z"/></svg>' +
+        '<span class="sev" data-sev="'+escAttr(sev)+'">'+esc(sev)+'</span>' +
+        '<span class="cat">'+esc(f.category||'other')+'</span>' +
+        '<span class="title">'+esc(title)+'</span>' +
+        '<span class="loc" role="button" tabindex="0" data-open="'+escAttr(f.id)+'" aria-label="'+escAttr(tMsg('card.jumpTo', {loc: locLabel}))+'">'+locLabel+'</span>' +
+        '<span class="conf">'+esc(f.confidence||'')+'</span>' +
+        '<button class="lang-chip'+(isTranslating?' is-loading':'')+'" type="button" '+
+          'data-act="translate" data-id="'+escAttr(f.id)+'" data-target="'+escAttr(otherLang)+'" '+
+          'title="'+escAttr(tMsg('card.translateTo', {lang: otherLangFull}))+'" '+
+          'aria-label="'+escAttr(tMsg('card.translateTo', {lang: otherLangFull}))+'">'+
+          (isTranslating ? esc(tMsg('card.translating')) : esc(tMsg('lang.' + showingLang))) +
+        '</button>' +
+      '</div>' +
+      '<div class="finding-body" id="body-'+escAttr(f.id)+'">' +
+        '<div class="grid2">' +
+          '<div class="col">' +
+            '<h4><span aria-hidden="true">🔍</span> '+esc(tMsg('card.problem'))+'</h4>' +
+            '<p>'+esc(description)+'</p>' +
+            (reasoning ? '<h4><span aria-hidden="true">🧠</span> '+esc(tMsg('card.reasoning'))+'</h4><p>'+esc(reasoning)+'</p>' : '') +
+            (questionsRaised && questionsRaised.length ? '<h4><span aria-hidden="true">❓</span> '+esc(tMsg('card.questions'))+'</h4><ul class="qa">'+questionsRaised.map(q=>'<li>'+esc(q)+'</li>').join('')+'</ul>' : '') +
+            (evidence && evidence.length ? '<h4><span aria-hidden="true">📎</span> '+esc(tMsg('card.evidence'))+'</h4>'+evidence.map(e=>'<div class="evidence">'+esc(e)+'</div>').join('') : '') +
+          '</div>' +
+          '<div class="col">' +
+            '<h4><span aria-hidden="true">🛠</span> '+esc(tMsg('card.solution'))+'</h4>' +
+            (fix
+              ? '<p>'+esc(fixTranslated.description||'')+'</p><pre class="fix">'+esc(fixTranslated.replacement||'')+'</pre><div class="fix-conf">'+esc(tMsg('card.fixConfidence', {level: fix.confidence||''}))+'</div>'
+              : '<p style="color:var(--fg-subtle)">'+esc(tMsg('card.noAutoFix'))+'</p>') +
+            (alternativesConsidered && alternativesConsidered.length ? '<h4><span aria-hidden="true">🔀</span> '+esc(tMsg('card.alternatives'))+'</h4><ul class="qa">'+alternativesConsidered.map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul>' : '') +
+            (f.relatedFiles && f.relatedFiles.length ? '<h4><span aria-hidden="true">🔗</span> '+esc(tMsg('card.relatedFiles'))+'</h4><ul class="qa">'+f.relatedFiles.map(a=>'<li>'+esc(a)+'</li>').join('')+'</ul>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="actions">' +
+          '<button class="btn btn--xs" type="button" data-act="open" data-id="'+escAttr(f.id)+'">'+esc(tMsg('card.jumpToCode'))+'</button>' +
+          (fix ? '<button class="btn btn--xs" type="button" data-act="apply" data-id="'+escAttr(f.id)+'">'+esc(tMsg('card.applyFix'))+'</button>' : '') +
+          '<button class="btn btn--ghost btn--xs" type="button" data-act="ask" data-id="'+escAttr(f.id)+'">'+esc(tMsg('card.askFollowUp'))+'</button>' +
+          '<button class="btn btn--ghost btn--xs" type="button" data-act="dismiss" data-id="'+escAttr(f.id)+'">'+esc(tMsg('card.dismiss'))+'</button>' +
+        '</div>' +
+      '</div>';
+    return card;
+  }
+
+  // Re-render a single finding card in place (for translation toggles).
+  function rerenderFinding(id){
+    const card = $('#findings').querySelector('[data-id="'+CSS.escape(id)+'"]');
+    if (!card) return;
+    const f = state.findings.find(x => x.id === id);
+    if (!f) return;
+    const wasExpanded = card.getAttribute('aria-expanded') === 'true';
+    const replacement = buildFindingCard(f);
+    if (wasExpanded) replacement.setAttribute('aria-expanded', 'true');
+    card.parentNode.replaceChild(replacement, card);
   }
 
   // ─── delegated event handlers ────────────────────────────────
@@ -1869,6 +2047,15 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   document.addEventListener('click', (ev)=>{
     const t = ev.target;
     if (!(t instanceof Element)) return;
+
+    // Header EN/ES toggle — postMessage to host, which calls back via
+    // panel.onLanguageChanged() with the new lang.
+    const langBtn = t.closest('.lang-btn');
+    if (langBtn instanceof HTMLElement && langBtn.dataset.lang){
+      vscode.postMessage({type:'setLang', lang: langBtn.dataset.lang});
+      ev.stopPropagation();
+      return;
+    }
 
     if (t instanceof HTMLElement && t.matches('.filter')){
       state.filter = t.dataset.f;
@@ -1885,6 +2072,24 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     const actEl = t.closest('[data-act]');
     if (actEl instanceof HTMLElement && actEl.dataset.id){
       const act = actEl.dataset.act;
+      if (act === 'translate'){
+        // Per-row language chip — request a translation if not cached, else
+        // flip displayLang immediately and re-render this card alone.
+        const id = actEl.dataset.id;
+        const target = actEl.dataset.target;
+        const f = state.findings.find(x => x.id === id);
+        if (!f) { ev.stopPropagation(); return; }
+        if ((f.originalLang || 'en') === target || (f.translations && f.translations[target])){
+          f.displayLang = target;
+          rerenderFinding(id);
+        } else {
+          f._translating = true;
+          rerenderFinding(id);
+          vscode.postMessage({type:'translateFinding', id, lang: target});
+        }
+        ev.stopPropagation();
+        return;
+      }
       const type = act === 'apply' ? 'applyFix' : act === 'ask' ? 'askFollowUp' : act === 'dismiss' ? 'dismiss' : 'open';
       vscode.postMessage({type, id: actEl.dataset.id});
       ev.stopPropagation();
@@ -1925,9 +2130,9 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       const on = !!state.passes[def.key];
       if (on) active++;
       html.push(
-        '<label class="checkpill" title="'+escAttr(def.hint)+'">' +
+        '<label class="checkpill" title="'+escAttr(passHint(def.key))+'">' +
           '<input type="checkbox" data-pass="'+escAttr(def.key)+'"'+(on?' checked':'')+'>' +
-          esc(def.label) +
+          esc(passLabel(def.key)) +
         '</label>'
       );
     }
@@ -1953,7 +2158,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     if (!startBtn) return;
     startBtn.setAttribute('aria-disabled', ok ? 'false' : 'true');
     if (!passActive){
-      startBtn.title = 'Pick at least one analysis pass';
+      startBtn.title = tMsg('branch.pickPassTitle');
     } else {
       startBtn.removeAttribute('title');
     }
@@ -2066,7 +2271,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     for (const [k, v] of state.steps){
       if (v && v.status === 'running'){ running = { k, v }; break }
     }
-    if (running) passText = (PASS_LABEL[running.k] || running.k);
+    if (running) passText = passLabelLong(running.k);
     else if (!state.isRunning && state.result){
       const c = state.result.findings ? state.result.findings.filter(f=>!f.dismissed).length : 0;
       passText = c + ' findings';
@@ -2138,7 +2343,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   $('#btn-fetch').addEventListener('click', () => {
     if (state.fetching) return;
     state.fetching = true;
-    const b = $('#btn-fetch'); b.setAttribute('aria-disabled','true'); b.innerHTML = '<span aria-hidden="true">⟳</span> Fetching…';
+    const b = $('#btn-fetch'); b.setAttribute('aria-disabled','true'); b.innerHTML = '<span aria-hidden="true">⟳</span> '+esc(tMsg('panel.fetching'));
     vscode.postMessage({type:'fetchBranches', prune:true});
   });
   $('#btn-start').addEventListener('click', () => {
@@ -2147,7 +2352,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       // double-clicked while the cancellation propagates.
       const b = $('#btn-start');
       b.setAttribute('aria-disabled', 'true');
-      b.innerHTML = '<span aria-hidden="true">■</span> Stopping…';
+      b.innerHTML = '<span aria-hidden="true">■</span> '+esc(tMsg('panel.stopping'));
       vscode.postMessage({type:'cancelReview'});
       return;
     }
@@ -2216,11 +2421,11 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       state.findings = []; state.steps.clear(); state.result = null; state.isRunning = true;
       $('#exec').hidden = true; $('#bullets').hidden = true;
       bumpCounter(); renderFindings(); renderTimeline(); renderBranchPicker(); renderResumeBanner();
-      appendLive('info', 'Review started: '+e.headBranch+' vs '+e.baseBranch, 'review');
+      appendLive('info', tMsg('log.reviewStarted', {head: e.headBranch, base: e.baseBranch}), 'review');
     } else if (e.kind === 'context'){
       state.steps.set('context', { status:'done', startedAt: e.at, endedAt: e.at, detail: (e.languages.join(', ')||'no lang') + (e.frameworks.length ? ' · '+e.frameworks.join(', ') : '') });
       renderTimeline();
-      appendLive('info', 'Detected: '+e.languages.join(', '), 'context');
+      appendLive('info', tMsg('log.detected', {value: e.languages.join(', ')}), 'context');
     } else if (e.kind === 'diff'){
       state.steps.set('diff', { status:'done', startedAt: e.at, endedAt: e.at, detail: e.filesChanged+' files · +'+e.additions+' / -'+e.deletions + (e.truncated?' · TRUNCATED':'') });
       renderTimeline();
@@ -2252,7 +2457,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       appendLive('error', e.error, e.pass);
     } else if (e.kind === 'passAwaitDecision'){
       const existing = state.steps.get(e.pass) || {};
-      state.steps.set(e.pass, { ...existing, status:'awaitDecision', endedAt: e.at, detail: 'Failed — pick an action: '+e.error });
+      state.steps.set(e.pass, { ...existing, status:'awaitDecision', endedAt: e.at, detail: tMsg('timeline.failedDecision', {error: e.error}) });
       renderTimeline();
       appendLive('warn', 'awaiting decision: '+e.error, e.pass);
     } else if (e.kind === 'passDecisionMade'){
@@ -2261,9 +2466,9 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       // will update status. For 'skip' specifically, transition here so the
       // step doesn't linger in awaitDecision while no further event arrives.
       if (e.decision === 'skip'){
-        state.steps.set(e.pass, { ...existing, status:'skipped', endedAt: e.at, detail: 'Skipped after failure.' });
+        state.steps.set(e.pass, { ...existing, status:'skipped', endedAt: e.at, detail: tMsg('timeline.skipped') });
       } else if (e.decision === 'stop'){
-        state.steps.set(e.pass, { ...existing, status:'error', endedAt: e.at, detail: existing.detail || 'Failed.' });
+        state.steps.set(e.pass, { ...existing, status:'error', endedAt: e.at, detail: existing.detail || tMsg('timeline.failed') });
       }
       renderTimeline();
       appendLive('info', 'decision: '+e.decision, e.pass);
@@ -2273,7 +2478,7 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       renderBranchPicker();
       renderTimeline();
       renderResumeBanner();
-      appendLive('warn', 'Review paused: '+e.reason, 'review');
+      appendLive('warn', tMsg('log.reviewPaused', {reason: e.reason}), 'review');
     } else if (e.kind === 'retryPassStart'){
       // Reserved for future use — the orchestrator currently fires passStart
       // for retries too, which is enough for the timeline.
@@ -2326,8 +2531,8 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       appendLive('info', '[fetch] ' + (m.output||'').trim());
     } else if (m.type === 'fetchError'){
       state.fetching = false;
-      const b = $('#btn-fetch'); b.removeAttribute('aria-disabled'); b.innerHTML = '<span aria-hidden="true">⟳</span> Fetch';
-      const errEl = $('#branch-error'); errEl.textContent = 'Fetch failed: '+m.message; errEl.removeAttribute('data-empty');
+      const b = $('#btn-fetch'); b.removeAttribute('aria-disabled'); b.innerHTML = '<span aria-hidden="true">⟳</span> '+esc(tMsg('panel.fetch'));
+      const errEl = $('#branch-error'); errEl.textContent = tMsg('log.fetchFailed', {message: m.message}); errEl.removeAttribute('data-empty');
     } else if (m.type === 'fetchPrompt'){
       const b = $('#btn-fetch'); b.innerHTML = '<span aria-hidden="true">🔐</span> ' + esc(m.message.replace(/\.{3,}$/,'…'));
       appendLive('warn', '[fetch] '+m.message);
@@ -2343,6 +2548,20 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
       renderResumeBanner();
       // Per-step Retry visibility depends on partial existing.
       renderTimeline();
+    } else if (m.type === 'findingTranslationPending'){
+      const f = state.findings.find(x => x.id === m.id);
+      if (f){ f._translating = true; rerenderFinding(m.id); }
+    } else if (m.type === 'findingTranslated'){
+      const f = state.findings.find(x => x.id === m.id);
+      if (f){
+        f.translations = Object.assign({}, f.translations || {}, { [m.lang]: m.fields });
+        f.displayLang = m.lang;
+        delete f._translating;
+        rerenderFinding(m.id);
+      }
+    } else if (m.type === 'findingTranslationError'){
+      const f = state.findings.find(x => x.id === m.id);
+      if (f){ delete f._translating; rerenderFinding(m.id); }
     }
   });
 

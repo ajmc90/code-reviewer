@@ -81,6 +81,13 @@ export interface OrchestratorDeps {
 export class ReviewOrchestrator {
   constructor(private deps: OrchestratorDeps) {}
 
+  /** Set from review() / hydrateForResume so passes & parser have one source of truth. */
+  private activeLang: 'en' | 'es' = 'en';
+
+  private getLang(): 'en' | 'es' {
+    return this.activeLang;
+  }
+
   async review(opts: ReviewOptions): Promise<ReviewResult> {
     const start = Date.now();
     const { events } = this.deps;
@@ -90,6 +97,7 @@ export class ReviewOrchestrator {
     const state: PartialReviewState = this.deps.resumeFrom
       ? this.hydrateForResume(this.deps.resumeFrom)
       : await this.bootstrapState(opts);
+    this.activeLang = state.opts.lang;
 
     // Snapshot the freshly built state so even an immediate failure doesn't
     // force re-collecting context on retry.
@@ -287,6 +295,7 @@ export class ReviewOrchestrator {
               changedFiles: state.changedFiles,
               extraContext: '',
               structuralRisks: state.structuralRisks,
+              lang: state.opts.lang,
             }),
           'explore'),
       },
@@ -295,14 +304,14 @@ export class ReviewOrchestrator {
         label: 'Pass — Security',
         increment: 12,
         condition: state.opts.passes.security,
-        run: () => this.runFocusedPass('security', () => buildSecurityPrompt({ ctx: state.ctx, diff: state.enrichedDiff }), 'security'),
+        run: () => this.runFocusedPass('security', () => buildSecurityPrompt({ ctx: state.ctx, diff: state.enrichedDiff, lang: state.opts.lang }), 'security'),
       },
       {
         pass: 'performance',
         label: 'Pass — Performance',
         increment: 12,
         condition: state.opts.passes.performance,
-        run: () => this.runFocusedPass('performance', () => buildPerformancePrompt({ ctx: state.ctx, diff: state.enrichedDiff }), 'performance'),
+        run: () => this.runFocusedPass('performance', () => buildPerformancePrompt({ ctx: state.ctx, diff: state.enrichedDiff, lang: state.opts.lang }), 'performance'),
       },
       {
         pass: 'accessibility',
@@ -312,7 +321,7 @@ export class ReviewOrchestrator {
         run: () =>
           this.runFocusedPass(
             'accessibility',
-            () => buildAccessibilityPrompt({ ctx: state.ctx, diff: state.enrichedDiff, uiFiles: detectUiFiles(state.changedFiles) }),
+            () => buildAccessibilityPrompt({ ctx: state.ctx, diff: state.enrichedDiff, uiFiles: detectUiFiles(state.changedFiles), lang: state.opts.lang }),
             'accessibility',
           ),
       },
@@ -321,7 +330,7 @@ export class ReviewOrchestrator {
         label: 'Pass — Tests',
         increment: 10,
         condition: state.opts.passes.tests,
-        run: () => this.runFocusedPass('tests', () => buildTestsPrompt({ ctx: state.ctx, diff: state.enrichedDiff }), 'tests'),
+        run: () => this.runFocusedPass('tests', () => buildTestsPrompt({ ctx: state.ctx, diff: state.enrichedDiff, lang: state.opts.lang }), 'tests'),
       },
       {
         pass: 'gaps',
@@ -331,7 +340,7 @@ export class ReviewOrchestrator {
         run: () =>
           this.runFocusedPass(
             'gaps',
-            () => buildGapsPrompt({ ctx: state.ctx, diff: state.enrichedDiff, conventions: state.conventions, changedFiles: state.changedFiles }),
+            () => buildGapsPrompt({ ctx: state.ctx, diff: state.enrichedDiff, conventions: state.conventions, changedFiles: state.changedFiles, lang: state.opts.lang }),
             'gaps',
           ),
       },
@@ -343,7 +352,7 @@ export class ReviewOrchestrator {
         run: () =>
           this.runFocusedPass(
             'permute',
-            () => buildPermutePrompt({ ctx: state.ctx, depth: state.opts.depth, diff: state.enrichedDiff }),
+            () => buildPermutePrompt({ ctx: state.ctx, depth: state.opts.depth, diff: state.enrichedDiff, lang: state.opts.lang }),
             'permute',
           ),
       },
@@ -362,6 +371,7 @@ export class ReviewOrchestrator {
                 depth: state.opts.depth,
                 priorFindingsJson: JSON.stringify(state.findings.map(stripIdForPrompt)),
                 diff: state.enrichedDiff,
+                lang: state.opts.lang,
               }),
             'critique',
           ),
@@ -496,7 +506,7 @@ export class ReviewOrchestrator {
     log(`[${pass}] prompt = ${prompt.length} chars (${Math.round(prompt.length / 1024)} KB)`);
     const text = await this.runCli(prompt, pass);
     log(`[${pass}] response = ${text.length} chars (${Math.round(text.length / 1024)} KB)`);
-    const parsed = parseClaudeOutput(text);
+    const parsed = parseClaudeOutput(text, this.getLang());
     if (parsed.findings.length === 0 && text.length > 0) {
       const preview = text.trim().slice(0, 600).replace(/\s+/g, ' ');
       log(`[${pass}] parsed 0 findings. Response preview: ${preview}${text.length > 600 ? '…' : ''}`);
@@ -522,10 +532,11 @@ export class ReviewOrchestrator {
       depth: opts.depth,
       allFindingsJson: JSON.stringify(findings.map(stripIdForPrompt)),
       diffStat: stat,
+      lang: opts.lang,
     });
     try {
       const text = await this.runCli(prompt, 'summary');
-      const parsed = parseClaudeOutput(text);
+      const parsed = parseClaudeOutput(text, opts.lang);
       if (parsed.summary) return parsed.summary;
     } catch (e) {
       this.deps.log(`Summary pass failed, using fallback: ${(e as Error).message}`);
