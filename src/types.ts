@@ -1,4 +1,12 @@
-export type Severity = 'critical' | 'major' | 'minor' | 'nit' | 'praise';
+export type Severity = 'critical' | 'major' | 'minor' | 'nit' | 'praise' | 'silenced';
+
+/**
+ * Why a finding was demoted to severity='silenced' on this run. The two modes
+ * mirror the dismiss popup: 'this' matched a single dismissed finding (same
+ * file + line range + title), 'pattern' matched a dismissed pattern
+ * (category + title regardless of location).
+ */
+export type SilencedMode = 'this' | 'pattern';
 
 export type Category =
   | 'bug'
@@ -62,7 +70,21 @@ export interface Finding {
   relatedFiles: string[];
   confidence: 'high' | 'medium' | 'low';
   pass: 'explore' | 'critique' | 'permute' | 'security' | 'performance' | 'tests' | 'accessibility' | 'gaps' | 'structural';
+  /**
+   * When a pass produces a finding that extends or refines a prior finding
+   * (instead of being a true duplicate), it sets this to the prior finding's
+   * id. UI renders a "Related" badge that jumps to the original.
+   */
+  relatedTo?: string;
   dismissed?: boolean;
+  /**
+   * When the finding matches a user-recorded dismiss rule, severity is
+   * rewritten to 'silenced' and these fields preserve the original signal +
+   * reason so the UI can render the badge and the "Restore" action.
+   */
+  silencedFrom?: Severity;
+  silencedMode?: SilencedMode;
+  silencedAt?: number;
   /** Language in which Claude generated this finding's user-visible text. */
   originalLang?: 'en' | 'es';
   /** Lazily-populated translations keyed by target language. Cached forever. */
@@ -126,6 +148,58 @@ export interface DiffHunk {
 
 export type ReasoningDepth = 'fast' | 'balanced' | 'deep' | 'obsessive';
 
+/**
+ * Per-file classification produced by the explore pass. Lets later specialists
+ * focus their attention (e.g. security ignores `docs`, perf ignores `tests`)
+ * and gives the UI a quick "what is this branch doing" map.
+ */
+export type ChangeKind =
+  | 'new-feature'
+  | 'refactor'
+  | 'bugfix'
+  | 'migration'
+  | 'config'
+  | 'deps'
+  | 'test'
+  | 'docs'
+  | 'style'
+  | 'other';
+
+export type BlastRadius = 'local' | 'module' | 'cross-cutting';
+
+export interface ChangeMapEntry {
+  file: string;
+  kind: ChangeKind;
+  blastRadius: BlastRadius;
+  note?: string;
+}
+
+/**
+ * Compact, prompt-friendly representation of findings already produced by
+ * earlier passes. Specialists receive this to avoid re-reporting the same
+ * issue from a different angle.
+ */
+export interface FindingIndexEntry {
+  file: string;
+  startLine: number;
+  endLine: number;
+  severity: Severity;
+  category: Category;
+  title: string;
+  pass: Finding['pass'];
+}
+
+/**
+ * Phases used by the orchestrator to group passes for the UI timeline and to
+ * decide what context each pass needs. The pipeline goes A → B → C → D → E.
+ *  A discovery       — structural + explore (changeMap)
+ *  B specialists     — security / performance / accessibility / tests
+ *  C consolidation   — local semantic dedupe + clustering (no CLI call)
+ *  D completeness    — gaps (sees all findings) + permute (only on critical)
+ *  E critique+summary
+ */
+export type ReviewPhase = 'discovery' | 'specialists' | 'consolidation' | 'completeness' | 'critique';
+
 export interface PassConfig {
   explore: boolean;
   critique: boolean;
@@ -176,6 +250,8 @@ export interface PartialReviewState {
   /** Final string fed to focused passes (file context + raw diff). Rebuilt after structural augments loadedFiles. */
   enrichedDiff: string;
   structuralRisks: string[];
+  /** Per-file classification produced by explore; consumed by specialists + UI. */
+  changeMap: ChangeMapEntry[];
   stat: { filesChanged: number; insertions: number; deletions: number };
   truncated: boolean;
   /** Passes that finished successfully — these are skipped on resume. */
@@ -184,7 +260,25 @@ export interface PartialReviewState {
   skippedPasses: string[];
   /** All findings collected so far (pre-dedupe). */
   findings: Finding[];
+  /**
+   * Last consolidation summary (count before/after, merge count). Surfaced in
+   * the UI tooltip so the user understands why finding counts drop after the
+   * consolidation phase.
+   */
+  lastConsolidation?: { before: number; after: number; merged: number };
+  /**
+   * Map of pass → reason it was skipped beyond user choice (e.g. permute
+   * skipped because there were no critical findings to alternativize). UI
+   * tooltips read this.
+   */
+  conditionalSkips?: Partial<Record<string, string>>;
   startedAt: number;
+  /**
+   * The list of passes this review was planned to run, in execution order.
+   * Used by the UI to compute accurate progress ("2/4 done") and the paused
+   * banner's pending count. Derived from opts.passes + conditional gating.
+   */
+  plannedPasses?: string[];
   /** Human-readable reason the review stopped (last error, or 'cancelled'). */
   pausedReason?: string;
 }

@@ -17,6 +17,10 @@ export class FindingsDecorator implements vscode.Disposable {
       minor: this.makeType('claudeReviewer.minor', 'ⓘ'),
       nit: this.makeType('claudeReviewer.nit', '·'),
       praise: this.makeType('claudeReviewer.nit', '✨'),
+      // Silenced findings reuse the muted nit color so they don't visually
+      // compete with real findings — but still mark the line so the user
+      // can see they came back.
+      silenced: this.makeType('claudeReviewer.nit', '🔕'),
     };
 
     this.listener = vscode.window.onDidChangeActiveTextEditor(() => this.refresh());
@@ -53,6 +57,7 @@ export class FindingsDecorator implements vscode.Disposable {
       minor: [],
       nit: [],
       praise: [],
+      silenced: [],
     };
 
     for (const f of this.active) {
@@ -122,7 +127,7 @@ function renderHover(f: Finding): vscode.MarkdownString {
 }
 
 function severityEmoji(s: Severity): string {
-  return { critical: '🛑', major: '⚠️', minor: 'ℹ️', nit: '·', praise: '✨' }[s];
+  return { critical: '🛑', major: '⚠️', minor: 'ℹ️', nit: '·', praise: '✨', silenced: '🔕' }[s];
 }
 
 function escapeMd(s: string): string {

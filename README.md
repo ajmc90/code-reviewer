@@ -20,10 +20,14 @@ No API key. No extra cost. Just your existing Claude subscription.
 
 ## Highlights
 
-- **🔬 Multi-pass reasoning** — not a single shot. Each pass has a job, and the final pass critiques the rest.
+- **🔬 Multi-pass reasoning** — five phases (discovery → specialists → consolidation → completeness → critique), each with a job. The final pass critiques the rest.
 - **📍 Pinpoint anchoring** — every finding maps to `file:start-end`. One click jumps to the exact range.
 - **🧠 Shows its work** — title, reasoning, questions raised, alternatives considered, evidence quotes, suggested fix.
-- **🎨 Modern review panel** — toggleable passes, severity + category filters, drag-resizable layout, collapsible sidebar.
+- **🎨 Modern review panel** — toggleable passes, severity + category filters, drag-resizable layout, collapsible sidebar, sidebar dashboard for at-a-glance status.
+- **⏸ Pause & resume** — if a pass fails or you cancel, the review snapshots itself and offers a one-click Resume with per-pass Retry.
+- **🔁 Apply Fix preview** — every suggested fix opens as a VS Code diff editor. Edit the right side, then Apply or Discard from the editor title.
+- **🔕 Silence noise** — dismiss findings as "this exact one" or "this pattern, everywhere". Future reviews demote matches to a `silenced` badge instead of nagging again. Restore any rule from the picker.
+- **🌐 Bilingual UI** — full English/Spanish UI with on-demand per-finding translation (each card has its own EN/ES chip).
 - **🧩 Adapts to your project** — auto-detects language, framework, tests, and reads `CLAUDE.md` / `README.md` / `CONTRIBUTING.md` / `ARCHITECTURE.md`.
 - **🔐 No API key** — talks to the `claude` CLI you're already logged into.
 
@@ -59,32 +63,47 @@ A second-screen-worthy UI built into VS Code.
 | Area | What it gives you |
 |---|---|
 | **Branch picker** | Local + remote branches, filterable, with last author / subject / age. Fetch & prune with one click; ahead/behind counter. SSH-passphrase prompts handled inline. |
-| **Analysis passes** | Pill checkboxes for every pass (Structural, Exploration, Security, Performance, Accessibility, Tests, Gaps, Alternatives, Self-critique). All on by default — uncheck what you don't need. "All / None" shortcuts. Selection persists across sessions. |
-| **Live activity** | Real-time timeline of each pass: queued → running → done, with elapsed time and a streaming snippet of what Claude is thinking. |
+| **Analysis passes** | Pill checkboxes grouped by phase (Discovery, Specialists, Completeness, Critique). Presets — *fast*, *deep*, *security* — flip the right set with one click. Per-pass tooltips explain what each does. Advanced toggle hides the granular controls when you don't need them. Selection persists across sessions. |
+| **Run card** | Sticky bottom card summarizes branches + active passes + estimated runtime. One ▶ button covers Start / Stop. Live progress chips during a run: phase, findings found, elapsed time. |
+| **Live activity** | Real-time timeline of each pass: queued → running → done, with elapsed time, a streaming snippet of what Claude is thinking, and inline Retry / Skip / Stop on failure. |
+| **Change map** | When the explore pass classifies each changed file (`new-feature`, `refactor`, `bugfix`, `migration`, `config`, `deps`, `test`, `docs`, `style`) with a blast-radius badge, the panel surfaces it as a collapsible map above the findings grid. |
 | **Log** | Raw streaming output, severity-colored. Copy or clear. |
 | **Executive summary** | Verdict, risk score, top concerns, strengths — emitted once the review finishes. |
-| **Findings grid** | Problem ↔ Solution cards. Severity ribbon, category badge, jump-to-code, apply fix, ask follow-up, dismiss. |
-| **Filters** | Severity chips (critical / major / minor / nit / praise) + category chips (security, accessibility, performance, …) with live counts + free-text search. Combine freely. |
+| **Findings grid** | Problem ↔ Solution cards. Severity ribbon, category badge, jump-to-code, apply fix, ask follow-up, dismiss / restore. Per-card EN/ES chip translates that finding on demand. "Related" badges link refinements back to their original finding. |
+| **Filters** | Severity chips (critical / major / minor / nit / praise / silenced) + category chips (security, accessibility, performance, …) with live counts + free-text search. Combine freely. |
 | **Collapse + resize** | Click ‹ to collapse the left pane into a vertical rail showing branches, current pass, spinner, and live severity counts. Drag the gutter between panes to resize (or `←/→` while focused, `Home/End` for min/max, dbl-click to reset). Width and collapse state persist. |
 
-> **Keyboard:** `Cmd/Ctrl + \` toggles the sidebar. `Cmd/Ctrl + Alt + R` starts a review.
+### Sidebar dashboard
+
+A second view lives in the activity-bar sidebar — the "always visible" companion to the big panel.
+
+- **At-a-glance state** — idle / running / paused / failed / done, with a colored brand pill.
+- **Live progress card** — phase fraction (e.g. `2/4 passes`), current pass label, live findings count, elapsed time. Cancel button included.
+- **Paused review banner** — when a review stopped mid-flight, the banner shows completed / skipped / pending counts and offers **Resume** + **Discard**. Highlights when the paused review is from a different branch than your current checkout.
+- **Last review summary** — branch pair, verdict, risk, severity chips, executive summary, top concerns, strengths, and **Export Report**.
+- **History** — the last 5 reviews per branch pair. Click any row to rehydrate that review back into the panel + tree + decorations.
+
+> **Keyboard:** `Cmd/Ctrl + \` toggles the panel sidebar. `Cmd/Ctrl + Alt + R` starts a review.
 
 ---
 
 ## What each pass does
 
-| Pass | Focus |
-|---|---|
-| **Structural exploration** | Surveys the diff, identifies hot spots, scopes the work |
-| **Exploration** | Open-ended walk through every changed file — correctness, regressions, integration risk |
-| **Security** | Prompt / SQL / command / path injection, authn/z, secrets, deserialization, weak crypto |
-| **Performance** | N+1, accidental O(n²), blocking I/O on hot paths, allocations |
-| **Accessibility** | WCAG / ARIA issues for UI changes (auto-skipped if no UI files touched) |
-| **Tests** | Missing coverage, brittle assertions, flaky patterns |
-| **Gaps** | Pieces that should exist but don't — error handling, null checks, observability |
-| **Alternatives** | Honest trade-off analysis for non-trivial changes (deep / obsessive depth only) |
-| **Self-critique** | Re-reads its own findings; drops noise, sharpens wording, fills gaps |
-| **Final summary** | Verdict · risk score · executive summary · top concerns · strengths |
+Passes are organized into five phases. The pipeline goes **A → B → C → D → E**.
+
+| Phase | Pass | Focus |
+|---|---|---|
+| **A · Discovery** | **Structural exploration** | Surveys the diff, identifies hot spots, requests extra files the specialists may need |
+| | **Exploration** | Open-ended walk through every changed file — correctness, regressions, integration risk. Emits the per-file change map. |
+| **B · Specialists** | **Security** | Prompt / SQL / command / path injection, authn/z, secrets, deserialization, weak crypto |
+| | **Performance** | N+1, accidental O(n²), blocking I/O on hot paths, allocations |
+| | **Accessibility** | WCAG / ARIA issues for UI changes (auto-skipped if no UI files touched) |
+| | **Tests** | Missing coverage, brittle assertions, flaky patterns |
+| **C · Consolidation** | *(local, no CLI)* | Semantic dedupe + clustering of findings from earlier passes. Surfaces a "−N merged" badge so the count drop is explained. |
+| **D · Completeness** | **Gaps** | Pieces that should exist but don't — error handling, null checks, observability |
+| | **Alternatives** | Honest trade-off analysis for non-trivial changes (deep / obsessive depth only; auto-skipped when there are no critical/major findings to alternativize) |
+| **E · Critique + summary** | **Self-critique** | Re-reads its own findings; drops noise, sharpens wording, fills gaps |
+| | **Final summary** | Verdict · risk score · executive summary · top concerns · strengths |
 
 Each finding includes:
 
@@ -94,7 +113,24 @@ Each finding includes:
 - **Alternatives considered**, with trade-offs
 - **Evidence** — direct quotes from the diff
 - **Suggested fix** with confidence and replacement code
+- **"Related" link** when a later pass refines a prior finding instead of duplicating it
 - Gutter markers + end-of-line tags + rich hover
+
+### Apply Fix — interactive preview
+
+Hitting **Apply Fix** on a finding doesn't write to disk immediately. Instead it opens a VS Code diff editor: your file on the left, the proposed fix on the right. You can **edit the right side** before applying — Claude's suggestion is a starting point, not a final answer. The editor title gets two actions:
+
+- **Apply this fix** — writes the right-pane contents to the real file and closes the diff.
+- **Discard fix** — closes the preview without touching anything.
+
+### Silence noise across reviews
+
+Findings you dismiss are remembered. The dismiss popup offers two scopes:
+
+- **Silence just this finding** — matches by `file:start-end + title`. Subsequent reviews demote the same finding at the same location.
+- **Silence this pattern everywhere** — matches by `category + title`. Demotes any future finding with that signature anywhere in the project.
+
+Matched findings come back as `severity: 'silenced'` with a 🔕 badge — visible (so you know it returned), muted (so it doesn't fight real-severity findings for attention). One click **Restore** un-silences. The command palette exposes **Unsilence a Finding…** to inspect/remove individual rules, and **Clear All Silenced Findings** to nuke the memory.
 
 ---
 
@@ -111,16 +147,45 @@ Each finding includes:
 
 ## Commands
 
+**Reviews**
+
 | Command | Default keybinding |
 |---|---|
 | `Claude Review: Open Review Panel` | — |
 | `Claude Review: Review Branch vs Base` | `Cmd+Alt+R` / `Ctrl+Alt+R` |
 | `Claude Review: Review Current Branch vs main` | — |
 | `Claude Review: Review Uncommitted Changes` | — |
-| `Claude Review: Ask Claude a Follow-Up` *(from a finding)* | — |
-| `Claude Review: Apply Suggested Fix` *(from a finding)* | — |
+| `Claude Review: Cancel Running Review` | — |
+| `Claude Review: Resume Paused Review` | — |
+| `Claude Review: Retry a Single Pass` | — |
+| `Claude Review: Discard Paused Review` | — |
 | `Claude Review: Export Review Report (Markdown)` | — |
 | `Claude Review: Clear Review Cache` | — |
+
+**Per-finding actions** *(from the panel, findings tree, or command palette on a selected finding)*
+
+| Command | Default keybinding |
+|---|---|
+| `Apply Suggested Fix` *(opens preview diff)* | — |
+| `Apply this fix` / `Discard fix` *(from the preview's editor title)* | — |
+| `Dismiss Finding` *(asks: this one, or this pattern everywhere?)* | — |
+| `Restore Silenced Finding` | — |
+| `Ask Claude a Follow-Up` *(opens a Claude CLI terminal preloaded with the finding)* | — |
+
+**Silenced findings**
+
+| Command | Default keybinding |
+|---|---|
+| `Claude Review: Unsilence a Finding…` | — |
+| `Claude Review: Clear All Silenced Findings` | — |
+
+**UI**
+
+| Command | Default keybinding |
+|---|---|
+| `Claude Review: Group Findings by Severity / File / Category` | — |
+| `Claude Review: Refresh Findings` | — |
+| `Claude Review: Set Panel Language to English / Spanish` | — |
 
 ---
 
@@ -130,6 +195,7 @@ Each finding includes:
 |---|---|---|
 | `claudeReviewer.claudeCliPath` | `claude` | Path to the Claude Code CLI binary |
 | `claudeReviewer.model` | `""` | Optional `--model` override (`opus`, `sonnet`, …) |
+| `claudeReviewer.translationModel` | `""` | Optional `--model` override used only for per-finding on-demand translations (typically a fast/cheap model like `haiku`). Empty = same as `model`. |
 | `claudeReviewer.baseBranch` | `""` | Default base branch (auto-detected if empty) |
 | `claudeReviewer.reasoningDepth` | `deep` | `fast` / `balanced` / `deep` / `obsessive` |
 | `claudeReviewer.passes` | all enabled | Project-level default for which passes run (the panel overrides per review) |
@@ -154,30 +220,90 @@ Each finding includes:
 
 ## Architecture
 
+The codebase is organized into focused modules — no file mixes presentation, business logic, and state. Webview UIs split CSS, client JS, render functions, and lifecycle into separate files so the working set stays small.
+
 ```text
 src/
-├── extension.ts                # VS Code entry: commands, lifecycle, state
-├── types.ts                    # Finding / ReviewResult / ProjectContext shapes
+├── extension.ts                  # VS Code entry: builds runtime, wires deps
+├── types.ts                      # Finding / ReviewResult / ProjectContext shapes
+│
+├── i18n/
+│   ├── index.ts                  # getLang / setLang / t() + language change emitter
+│   └── messages.ts               # EN + ES dictionaries (~900 keys)
+│
 ├── git/
-│   ├── gitService.ts           # diff, merge-base, branch enumeration, parser
-│   └── sshAuth.ts              # interactive SSH-key unlock
+│   ├── gitService.ts             # diff, merge-base, branch enumeration, parser
+│   └── sshAuth.ts                # interactive SSH-key unlock
+│
 ├── claude/
-│   ├── cliClient.ts            # spawns `claude --print` — no API key
-│   ├── prompts.ts              # multi-pass prompts
-│   ├── parser.ts               # normalises + dedupes Claude's JSON
-│   └── structuralParser.ts     # parses the structural-exploration pass
+│   ├── cliClient.ts              # spawns `claude --print` — no API key
+│   ├── prompts.ts                # multi-pass prompts
+│   ├── parser.ts                 # normalises + dedupes Claude's JSON + relates findings
+│   ├── structuralParser.ts       # parses the structural-exploration pass
+│   ├── translator.ts             # batched on-demand finding translation
+│   └── onDemandTranslator.ts     # extension-side translation orchestration + caching
+│
 ├── context/
-│   ├── projectContext.ts       # auto-detect language, frameworks, tools
-│   └── fileContext.ts          # per-file context Claude needs
+│   ├── projectContext.ts         # auto-detect language, frameworks, tools
+│   └── fileContext.ts            # per-file context Claude needs + UI-files heuristic
+│
 ├── core/
-│   ├── orchestrator.ts         # runs passes, consolidates, summarises
-│   └── events.ts               # live event bus → review panel
+│   ├── events.ts                 # live event bus → review panel + sidebar
+│   ├── extensionContext.ts       # ExtensionRuntime interface (shared deps bag)
+│   ├── partialState.ts           # paused-review state load / save / summarise
+│   ├── historyStore.ts           # last-N reviews, per-(base, head) index + full results
+│   ├── silenceStore.ts           # persisted dismiss rules + apply-to-findings matcher
+│   ├── reportMarkdown.ts         # ReviewResult → Markdown export
+│   ├── reviewController.ts       # runReview / executeReviewLoop / orchestrator wiring
+│   ├── orchestrator.ts           # barrel re-export
+│   └── orchestrator/
+│       ├── index.ts              # ReviewOrchestrator class (thin)
+│       ├── types.ts              # OrchestratorDeps
+│       ├── errors.ts             # ReviewPausedError
+│       ├── state.ts              # bootstrapState / hydrateForResume / planned passes
+│       ├── phaseLoop.ts          # five-phase pipeline driver
+│       ├── passRunner.ts         # executePassWithDecisions / runPlannedPass / shouldRun
+│       ├── cli.ts                # runCli / runCliWithTools
+│       ├── helpers.ts            # tagPass / stripIdForPrompt / report / checkCancel
+│       ├── diffSummarizer.ts     # oversized-diff chunker
+│       └── passes/
+│           ├── structural.ts     # Phase A: structural exploration
+│           ├── explore.ts        # Phase A: open-ended walk + change map
+│           ├── specialists.ts    # Phase B: security / performance / a11y / tests
+│           ├── consolidation.ts  # Phase C: local semantic dedupe (no CLI)
+│           ├── completeness.ts   # Phase D: gaps + alternatives
+│           ├── critique.ts       # Phase E: self-critique
+│           ├── summary.ts        # Phase E: final summary + fallback
+│           └── runFocused.ts     # shared prompt → CLI → parse helper
+│
+├── commands/
+│   ├── index.ts                  # registerAllCommands(rt, panelDeps)
+│   ├── reviewCommands.ts         # show / run / cancel / resume / retry / discard
+│   ├── findingCommands.ts        # open / applyFix(+confirm/cancel) / dismiss / restore / ask
+│   └── miscCommands.ts           # export / language / groupBy / refresh
+│
 └── ui/
-    ├── reviewPanel.ts          # the main webview (branch picker, passes, findings…)
-    ├── findingsTree.ts         # activity-bar tree of findings
-    ├── summaryView.ts          # verdict + risk + top concerns view
-    ├── decorations.ts          # gutter + hover + inline tags
-    └── statusBar.ts            # in-progress + counters in the status bar
+    ├── reviewPanel.ts            # barrel re-export
+    ├── reviewPanel/
+    │   ├── index.ts              # ReviewPanel class (lifecycle, message routing)
+    │   ├── template.ts           # HTML body
+    │   ├── styles.ts             # CSS (isolated)
+    │   ├── client.ts             # webview JS + buildClientScript(lang)
+    │   ├── branchOps.ts          # branch snapshot + SSH-unlock fetch helper
+    │   └── sanitize.ts           # sanitizePasses (input validation)
+    ├── summaryView.ts            # barrel re-export
+    ├── summaryView/
+    │   ├── index.ts              # SummaryViewProvider (sidebar dashboard)
+    │   ├── render.ts             # pure render functions + renderHtml
+    │   ├── styles.ts             # CSS (isolated)
+    │   ├── client.ts             # webview JS
+    │   ├── types.ts              # SummaryDeps / HistoryEntry / RunState
+    │   ├── eventReducer.ts       # pure ReviewEvent → RunState reducer
+    │   └── messageRouter.ts      # webview message dispatch
+    ├── findingsTree.ts           # activity-bar tree of findings
+    ├── decorations.ts            # gutter + hover + inline tags
+    ├── statusBar.ts              # in-progress + counters in the status bar
+    └── fixPreview.ts             # claude-fix:// text-document provider for the diff preview
 ```
 
 ---

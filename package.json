@@ -85,16 +85,47 @@
       {
         "command": "claudeReviewer.openFinding",
         "title": "%cmd.openFinding%",
-        "category": "%category.claudeReview%"
+        "category": "%category.claudeReview%",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "claudeReviewer.applyFix",
         "title": "%cmd.applyFix%",
-        "category": "%category.claudeReview%"
+        "category": "%category.claudeReview%",
+        "icon": "$(lightbulb-autofix)"
+      },
+      {
+        "command": "claudeReviewer.applyFixConfirm",
+        "title": "%cmd.applyFixConfirm%",
+        "category": "%category.claudeReview%",
+        "icon": "$(check)"
+      },
+      {
+        "command": "claudeReviewer.applyFixCancel",
+        "title": "%cmd.applyFixCancel%",
+        "category": "%category.claudeReview%",
+        "icon": "$(close)"
       },
       {
         "command": "claudeReviewer.dismissFinding",
         "title": "%cmd.dismissFinding%",
+        "category": "%category.claudeReview%",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "claudeReviewer.restoreFinding",
+        "title": "%cmd.restoreFinding%",
+        "category": "%category.claudeReview%",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "claudeReviewer.unsilence",
+        "title": "%cmd.unsilence%",
+        "category": "%category.claudeReview%"
+      },
+      {
+        "command": "claudeReviewer.clearSilenced",
+        "title": "%cmd.clearSilenced%",
         "category": "%category.claudeReview%"
       },
       {
@@ -209,6 +240,18 @@
           "command": "claudeReviewer.dismissFinding",
           "when": "view == claudeReviewer.findings && viewItem =~ /finding/",
           "group": "inline"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "claudeReviewer.applyFixConfirm",
+          "when": "resourceScheme == claude-fix",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeReviewer.applyFixCancel",
+          "when": "resourceScheme == claude-fix",
+          "group": "navigation@2"
         }
       ]
     },
@@ -387,11 +430,10 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
+    "@vscode/vsce": "^2.32.0",
     "eslint": "^8.57.1",
-    "typescript": "^5.3.2",
-    "@vscode/vsce": "^2.32.0"
+    "typescript": "^5.3.2"
   },
-  "dependencies": {},
   "packageManager": "pnpm@10.28.2",
   "repository": {
     "type": "git",

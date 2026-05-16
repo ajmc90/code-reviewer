@@ -1,12 +1,25 @@
 import * as vscode from 'vscode';
+import { ChangeMapEntry, ReviewPhase } from '../types';
 
-export type PassName = 'context' | 'diff' | 'structural' | 'explore' | 'security' | 'performance' | 'accessibility' | 'tests' | 'gaps' | 'permute' | 'critique' | 'summary';
+export type PassName = 'context' | 'diff' | 'structural' | 'explore' | 'security' | 'performance' | 'accessibility' | 'tests' | 'gaps' | 'permute' | 'critique' | 'summary' | 'consolidation';
 
 /** User decision when a pass fails mid-review. */
 export type PassFailureDecision = 'retry' | 'skip' | 'stop';
 
 export type ReviewEvent =
-  | { kind: 'start'; baseBranch: string; headBranch: string; at: number }
+  | {
+      kind: 'start';
+      baseBranch: string;
+      headBranch: string;
+      /**
+       * The actual pass keys this run will execute (after applying user
+       * selection and depth-gating). Lets the UI compute accurate progress
+       * fractions like "2/4 passes" instead of "2/12 passes" against a
+       * hardcoded total.
+       */
+      plannedPasses: PassName[];
+      at: number;
+    }
   | { kind: 'context'; languages: string[]; frameworks: string[]; testFrameworks: string[]; conventions: string[]; at: number }
   | { kind: 'diff'; filesChanged: number; additions: number; deletions: number; truncated: boolean; at: number }
   | { kind: 'passStart'; pass: PassName; label: string; at: number }
@@ -23,6 +36,18 @@ export type ReviewEvent =
   // Single-pass retry (from the per-step "Retry" affordance after the review stopped).
   | { kind: 'retryPassStart'; pass: PassName; at: number }
   | { kind: 'findingAdded'; finding: any; at: number }
+  // The explore pass produced a per-file changeMap. UI uses it to render the
+  // "Changes in this branch" section above the findings grid.
+  | { kind: 'changeMap'; entries: ChangeMapEntry[]; at: number }
+  // The local consolidation phase ran. before/after counts let the UI explain
+  // why the finding total dropped after specialists.
+  | { kind: 'consolidation'; before: number; after: number; merged: number; at: number }
+  // A pass was skipped because a runtime condition was not met (e.g. permute
+  // skipped because no critical findings exist). UI surfaces the reason as a
+  // tooltip on the pass pill.
+  | { kind: 'conditionalSkip'; pass: PassName; reason: string; at: number }
+  // Phase marker — purely for UI to render section headers in the timeline.
+  | { kind: 'phaseStart'; phase: ReviewPhase; at: number }
   | { kind: 'log'; level: 'info' | 'warn' | 'error'; message: string; at: number }
   | { kind: 'done'; verdict: string; durationMs: number; findingCount: number; at: number }
   | { kind: 'cancelled'; at: number };

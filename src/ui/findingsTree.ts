@@ -16,7 +16,7 @@ class FindingNode {
   constructor(public finding: Finding) {}
 }
 
-const SEVERITY_ORDER: Severity[] = ['critical', 'major', 'minor', 'nit', 'praise'];
+const SEVERITY_ORDER: Severity[] = ['critical', 'major', 'minor', 'nit', 'praise', 'silenced'];
 
 export class FindingsTreeProvider implements vscode.TreeDataProvider<Node> {
   private _onDidChange = new vscode.EventEmitter<Node | undefined>();
@@ -140,5 +140,7 @@ function severityIcon(sev: Severity): vscode.ThemeIcon {
       return new vscode.ThemeIcon('circle-small', new vscode.ThemeColor('claudeReviewer.nit'));
     case 'praise':
       return new vscode.ThemeIcon('star-full', new vscode.ThemeColor('claudeReviewer.nit'));
+    case 'silenced':
+      return new vscode.ThemeIcon('bell-slash', new vscode.ThemeColor('claudeReviewer.nit'));
   }
 }

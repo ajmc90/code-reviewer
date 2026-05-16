@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ReviewEventBus, PassName } from '../core/events';
 import { Lang, t } from '../i18n';
 
-const PASS_ORDER: PassName[] = ['context', 'diff', 'structural', 'explore', 'security', 'performance', 'accessibility', 'tests', 'gaps', 'permute', 'critique', 'summary'];
+const PASS_ORDER: PassName[] = ['context', 'diff', 'structural', 'explore', 'security', 'performance', 'accessibility', 'tests', 'consolidation', 'gaps', 'permute', 'critique', 'summary'];
 const PASS_SHORT: Record<PassName, string> = {
   context: 'ctx',
   diff: 'diff',
@@ -12,6 +12,7 @@ const PASS_SHORT: Record<PassName, string> = {
   performance: 'perf',
   accessibility: 'a11y',
   tests: 'tests',
+  consolidation: 'merge',
   gaps: 'gaps',
   permute: 'alts',
   critique: 'critique',

@@ -1,10 +1,25 @@
-import { Finding, ReviewSummary, Severity, Category } from '../types';
+import { BlastRadius, ChangeKind, ChangeMapEntry, Finding, ReviewSummary, Severity, Category } from '../types';
 import { Lang } from '../i18n';
 
 interface RawOutput {
   summary?: Partial<ReviewSummary>;
   findings?: any[];
+  changeMap?: any[];
 }
+
+const VALID_CHANGE_KIND: ChangeKind[] = [
+  'new-feature',
+  'refactor',
+  'bugfix',
+  'migration',
+  'config',
+  'deps',
+  'test',
+  'docs',
+  'style',
+  'other',
+];
+const VALID_BLAST_RADIUS: BlastRadius[] = ['local', 'module', 'cross-cutting'];
 
 /**
  * Robust JSON extractor.
@@ -96,7 +111,10 @@ function extractBalancedObjects(text: string): string[] {
   return out;
 }
 
-export function parseClaudeOutput(text: string, lang: Lang = 'en'): { summary?: ReviewSummary; findings: Finding[] } {
+export function parseClaudeOutput(
+  text: string,
+  lang: Lang = 'en',
+): { summary?: ReviewSummary; findings: Finding[]; changeMap?: ChangeMapEntry[] } {
   const jsonStr = extractJson(text);
   if (!jsonStr) {
     return { findings: [] };
@@ -138,7 +156,23 @@ export function parseClaudeOutput(text: string, lang: Lang = 'en'): { summary?: 
     };
   }
 
-  return { summary, findings };
+  let changeMap: ChangeMapEntry[] | undefined;
+  if (Array.isArray(raw.changeMap)) {
+    changeMap = raw.changeMap
+      .map(normalizeChangeMapEntry)
+      .filter((e): e is ChangeMapEntry => e !== null);
+  }
+
+  return { summary, findings, changeMap };
+}
+
+function normalizeChangeMapEntry(e: any): ChangeMapEntry | null {
+  if (!e || typeof e !== 'object') return null;
+  if (typeof e.file !== 'string' || !e.file) return null;
+  const kind: ChangeKind = VALID_CHANGE_KIND.includes(e.kind) ? e.kind : 'other';
+  const blastRadius: BlastRadius = VALID_BLAST_RADIUS.includes(e.blastRadius) ? e.blastRadius : 'local';
+  const note = typeof e.note === 'string' && e.note.trim() ? String(e.note).slice(0, 200) : undefined;
+  return { file: e.file, kind, blastRadius, note };
 }
 
 const VALID_SEVERITY: Severity[] = ['critical', 'major', 'minor', 'nit', 'praise'];
@@ -203,25 +237,42 @@ function arr(v: any): string[] {
 }
 
 /**
- * Dedupe findings that target the same file/line range and have very similar
- * titles. Multi-pass reviews can produce overlapping comments.
+ * Semantic dedupe: cluster findings that target the same file within a small
+ * line proximity (±3) and share a similar normalized title or the same
+ * category. Within each cluster, keep the highest-severity finding and merge
+ * supporting fields from the rest.
+ *
+ * Findings marked with isRelated (title starts with "Related:") are NEVER
+ * merged into their referent — the prefix exists precisely to keep them as
+ * distinct angles.
  */
 export function dedupeFindings(findings: Finding[]): Finding[] {
-  const seen = new Map<string, Finding>();
+  const buckets: Finding[][] = [];
+
   for (const f of findings) {
-    const key = `${f.file}:${f.range.startLine}-${f.range.endLine}:${normalize(f.title)}`;
-    const existing = seen.get(key);
-    if (!existing) {
-      seen.set(key, f);
+    if (isRelatedFinding(f)) {
+      // Related findings live in their own bucket so they survive dedupe.
+      buckets.push([f]);
       continue;
     }
-    if (severityRank(f.severity) > severityRank(existing.severity)) {
-      seen.set(key, mergeFindings(f, existing));
-    } else {
-      seen.set(key, mergeFindings(existing, f));
-    }
+    const bucket = findMatchingBucket(buckets, f);
+    if (bucket) bucket.push(f);
+    else buckets.push([f]);
   }
-  return [...seen.values()].sort((a, b) => {
+
+  const result: Finding[] = [];
+  for (const bucket of buckets) {
+    if (bucket.length === 1) {
+      result.push(bucket[0]);
+      continue;
+    }
+    bucket.sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+    let merged = bucket[0];
+    for (let i = 1; i < bucket.length; i++) merged = mergeFindings(merged, bucket[i]);
+    result.push(merged);
+  }
+
+  return result.sort((a, b) => {
     const s = severityRank(b.severity) - severityRank(a.severity);
     if (s !== 0) return s;
     if (a.file !== b.file) return a.file.localeCompare(b.file);
@@ -229,12 +280,51 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
   });
 }
 
+const LINE_PROXIMITY = 3;
+
+function findMatchingBucket(buckets: Finding[][], f: Finding): Finding[] | null {
+  for (const bucket of buckets) {
+    const candidate = bucket[0];
+    if (candidate.file !== f.file) continue;
+    if (isRelatedFinding(candidate)) continue;
+    if (!rangesOverlap(candidate.range, f.range, LINE_PROXIMITY)) continue;
+    // Match if titles are similar OR the category matches AND they overlap closely.
+    if (titlesSimilar(candidate.title, f.title)) return bucket;
+    if (candidate.category === f.category && rangesOverlap(candidate.range, f.range, 0)) return bucket;
+  }
+  return null;
+}
+
+function rangesOverlap(
+  a: { startLine: number; endLine: number },
+  b: { startLine: number; endLine: number },
+  slack: number,
+): boolean {
+  return a.startLine - slack <= b.endLine && b.startLine - slack <= a.endLine;
+}
+
+function titlesSimilar(a: string, b: string): boolean {
+  const na = normalize(a);
+  const nb = normalize(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.length >= 12 && nb.includes(na)) return true;
+  if (nb.length >= 12 && na.includes(nb)) return true;
+  return false;
+}
+
+function isRelatedFinding(f: Finding): boolean {
+  return /^related:\s*/i.test(f.title) || Boolean(f.relatedTo);
+}
+
 function normalize(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40);
+  return s.toLowerCase().replace(/^related:\s*/i, '').replace(/[^a-z0-9]/g, '').slice(0, 40);
 }
 
 function severityRank(s: Severity): number {
-  return { critical: 4, major: 3, minor: 2, nit: 1, praise: 0 }[s];
+  // 'silenced' sits at the very bottom so dedupe never picks a silenced
+  // finding over a real-severity one when both refer to the same spot.
+  return { critical: 4, major: 3, minor: 2, nit: 1, praise: 0, silenced: -1 }[s];
 }
 
 function mergeFindings(primary: Finding, other: Finding): Finding {
@@ -247,4 +337,31 @@ function mergeFindings(primary: Finding, other: Finding): Finding {
     evidence: [...new Set([...primary.evidence, ...other.evidence])],
     relatedFiles: [...new Set([...primary.relatedFiles, ...other.relatedFiles])],
   };
+}
+
+/**
+ * For each finding whose title starts with "Related:", try to find the prior
+ * finding it most likely extends (same file, closest line range, no
+ * "Related:" itself) and set relatedTo to that finding's id. Idempotent — if
+ * relatedTo is already set, the existing value is kept.
+ */
+export function linkRelatedFindings(newFindings: Finding[], priorFindings: Finding[]): void {
+  for (const f of newFindings) {
+    if (f.relatedTo) continue;
+    if (!/^related:\s*/i.test(f.title)) continue;
+    const candidates = priorFindings.filter(
+      (p) => p.file === f.file && !/^related:\s*/i.test(p.title),
+    );
+    if (candidates.length === 0) continue;
+    candidates.sort((a, b) => lineDistance(a.range, f.range) - lineDistance(b.range, f.range));
+    f.relatedTo = candidates[0].id;
+  }
+}
+
+function lineDistance(
+  a: { startLine: number; endLine: number },
+  b: { startLine: number; endLine: number },
+): number {
+  if (rangesOverlap(a, b, 0)) return 0;
+  return Math.min(Math.abs(a.startLine - b.endLine), Math.abs(b.startLine - a.endLine));
 }

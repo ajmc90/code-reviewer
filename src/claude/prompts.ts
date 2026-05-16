@@ -1,4 +1,4 @@
-import { DiffFile, ProjectContext, ReasoningDepth } from '../types';
+import { ChangeMapEntry, DiffFile, FindingIndexEntry, ProjectContext, ReasoningDepth } from '../types';
 import { Lang } from '../i18n';
 
 const JSON_CONTRACT = `
@@ -22,7 +22,7 @@ interface Output {
     category: "bug" | "security" | "performance" | "correctness" | "maintainability"
             | "readability" | "tests" | "docs" | "style" | "architecture"
             | "accessibility" | "concurrency" | "data-integrity" | "api-contract" | "other";
-    title: string;                  // <= 90 chars, imperative-ish
+    title: string;                  // <= 90 chars, imperative-ish. Prefix with "Related: " if it extends a prior finding.
     description: string;            // 1-4 sentences, plain
     reasoning: string;              // WHY this is a problem. Show your work.
     questionsRaised: string[];      // questions you asked yourself while reviewing this spot
@@ -43,7 +43,67 @@ Hard rules:
 - If you cannot precisely locate a problem, lower confidence to "low" and say so in reasoning.
 - Never invent code that is not in the diff or in the project context.
 - praise findings are allowed but use sparingly and only for things truly worth highlighting.
+
+suggestedFix rules (CRITICAL — fixes are applied verbatim by replacing lines [startLine..endLine] with replacement):
+- startLine/endLine MUST cover a SYNTACTICALLY COMPLETE unit. Never end the range in the middle of an expression, a multi-line JSX tag, an open brace, an open parenthesis, or a multi-line string. If the smallest meaningful unit spans 20 lines, the range must span 20 lines — do NOT cite only the first or last line.
+- replacement MUST be a self-contained, syntactically valid drop-in for that exact range. After substitution, the file must still parse: every tag opened in the replacement is closed in the replacement, every brace/paren balances, no attributes or fragments from the surrounding code are left orphaned, no unintended sibling elements are deleted.
+- replacement preserves everything outside the cited range. If the original range contained more than just the offending construct (e.g. you are fixing the <input> inside a <div className="field">…</div>, and your range includes the wrapping div), the replacement must reconstruct the wrapping context faithfully, NOT silently drop it.
+- replacement uses the same indentation style and base indent level as the lines being replaced, so the resulting file is not visibly malformatted.
+- If you cannot produce a replacement that satisfies these rules (e.g. the right fix needs edits in multiple non-contiguous regions, or in a different file), OMIT suggestedFix entirely and explain the fix in description/reasoning instead. A missing suggestedFix is strictly better than one that corrupts the file.
+- Never use suggestedFix to ADD a new construct alongside the original (e.g. adding a submit button to a form). suggestedFix is for REPLACING the cited range. Additive changes belong in description as prose.
 `.trim();
+
+/**
+ * Anti-duplication block injected into specialists when there are prior
+ * findings. The model is instructed to either skip the duplicate or emit it
+ * as a "Related:" finding that extends the original.
+ */
+function antiDuplicationBlock(priorFindings: FindingIndexEntry[]): string {
+  if (priorFindings.length === 0) return '';
+  const lines = priorFindings
+    .slice(0, 80)
+    .map(
+      (f) =>
+        `- [${f.file}:${f.startLine}${f.endLine !== f.startLine ? `-${f.endLine}` : ''}] (${f.severity}/${f.category}) ${truncate(f.title, 90)}`,
+    );
+  return [
+    '--- PRIOR FINDINGS ALREADY REPORTED (do NOT duplicate) ---',
+    'Earlier passes have already produced these findings. Rules:',
+    '  1. If your finding is the SAME issue (same file ± 3 lines AND same root cause), DO NOT emit it again.',
+    '  2. If your finding is a RELATED but distinct angle (e.g. tests pass missed an edge case that perf pass would also flag for a different reason), prefix the title with "Related: " and reference the prior file:line in your reasoning.',
+    '  3. If your finding contradicts a prior one (you think it is wrong), still emit yours and explain the disagreement in reasoning — the critique pass will reconcile.',
+    '',
+    'Prior findings:',
+    ...lines,
+    priorFindings.length > 80 ? `- … (${priorFindings.length - 80} more omitted)` : '',
+    '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+/**
+ * ChangeMap block: tells the specialist what kind of change each file
+ * represents so it can focus (e.g. security mostly cares about new-feature +
+ * config + deps + migration, not docs/style/test).
+ */
+function changeMapBlock(changeMap: ChangeMapEntry[]): string {
+  if (changeMap.length === 0) return '';
+  const lines = changeMap
+    .slice(0, 80)
+    .map((c) => `- ${c.file} · ${c.kind} · ${c.blastRadius}${c.note ? ` — ${c.note}` : ''}`);
+  return [
+    '--- CHANGE MAP (per-file classification from explore pass) ---',
+    'Use this to focus your attention. Skip files whose "kind" is clearly outside your concern.',
+    ...lines,
+    changeMap.length > 80 ? `- … (${changeMap.length - 80} more omitted)` : '',
+    '',
+  ].join('\n');
+}
+
+function truncate(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n - 1) + '…';
+}
 
 /**
  * Output-language directive appended to the system preamble. JSON keys MUST
@@ -59,6 +119,7 @@ function languageDirective(lang: Lang): string {
       '- DO NOT translate enum values (severity, category, confidence, overallVerdict).',
       '- Inside suggestedFix.replacement, the value is CODE. Keep the code verbatim; only translate inline comments if present.',
       '- Evidence items are quoted diff snippets — keep them verbatim, do NOT translate code.',
+      '- The "Related: " prefix in titles stays in English (it is a marker, not prose).',
     ].join('\n');
   }
   // en — explicit so future locales don't accidentally inherit Spanish.
@@ -107,6 +168,8 @@ export function buildSystemPreamble(ctx: ProjectContext, depth: ReasoningDepth, 
   ].join('\n');
 }
 
+// ─── PHASE A — DISCOVERY ──────────────────────────────────────────────
+
 export function buildExplorePrompt(args: {
   ctx: ProjectContext;
   depth: ReasoningDepth;
@@ -128,7 +191,8 @@ export function buildExplorePrompt(args: {
     '',
     args.structuralRisks && args.structuralRisks.length
       ? '--- HINTS FROM STRUCTURAL EXPLORATION (consider these when reviewing) ---\n' +
-        args.structuralRisks.map((r) => '- ' + r).join('\n') + '\n'
+        args.structuralRisks.map((r) => '- ' + r).join('\n') +
+        '\n'
       : '',
     args.extraContext || '',
     '--- PROJECT CONVENTIONS (excerpts from CLAUDE.md / README / contributing docs) ---',
@@ -137,104 +201,100 @@ export function buildExplorePrompt(args: {
     '--- UNIFIED DIFF (base...head) ---',
     args.diff,
     '',
-    '--- TASK: PASS 1 — EXPLORATION ---',
-    "First, build a mental model of what this branch does. Then walk every changed file. Surface findings about correctness, bugs, regressions and missing edge cases. Don't worry yet about style or perf — those are later passes.",
+    '--- TASK: PHASE A — DISCOVERY & EXPLORATION ---',
+    'You are the first reviewer to see this branch. Your job has TWO parts:',
+    '',
+    'PART 1 — Build a mental model. For each changed file, classify what kind of change it is and how far its effects reach. This map will be passed to every later pass so they can focus.',
+    '',
+    'PART 2 — Walk every changed file and surface findings about correctness, bugs, regressions and missing edge cases. Do NOT focus on style/perf/security/a11y yet — those are dedicated later passes; only flag them here if they are blatant and you would feel bad letting them through.',
+    '',
+    'Respond with a SINGLE JSON object of this exact shape (no prose, no fences):',
+    '',
+    '{',
+    '  "changeMap": [',
+    '    { "file": "src/foo.ts", "kind": "new-feature", "blastRadius": "module", "note": "adds public Foo API used by bar" },',
+    '    { "file": "src/bar.ts", "kind": "refactor",    "blastRadius": "local" }',
+    '  ],',
+    '  "summary": { "overallVerdict": "...", "executiveSummary": "...", "topConcerns": [...], "strengths": [...], "riskScore": 0 },',
+    '  "findings": [ ... as in the standard contract ... ]',
+    '}',
+    '',
+    'changeMap rules:',
+    '- kind ∈ "new-feature" | "refactor" | "bugfix" | "migration" | "config" | "deps" | "test" | "docs" | "style" | "other"',
+    '- blastRadius ∈ "local" (only this file) | "module" (this file + siblings/callers in same area) | "cross-cutting" (touches many unrelated areas, e.g. utility used everywhere)',
+    '- One entry per changed file. note is optional (≤ 90 chars).',
     '',
     JSON_CONTRACT,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-export function buildCritiquePrompt(args: {
+// ─── PHASE B — SPECIALISTS ────────────────────────────────────────────
+
+export function buildSecurityPrompt(args: {
   ctx: ProjectContext;
-  depth: ReasoningDepth;
-  priorFindingsJson: string;
   diff: string;
+  changeMap: ChangeMapEntry[];
+  priorFindings: FindingIndexEntry[];
   lang: Lang;
 }): string {
-  return [
-    buildSystemPreamble(args.ctx, args.depth, args.lang),
-    '',
-    '--- PASS 2 — SELF-CRITIQUE ---',
-    'Below are findings from pass 1. Your job is to challenge them.',
-    'For each finding decide:',
-    '  - KEEP (still load-bearing, evidence is strong)',
-    '  - REVISE (refine wording, severity, or fix)',
-    '  - DROP (not actually a problem, or duplicate)',
-    '',
-    'Also: add any findings that pass 1 missed. Look especially for:',
-    '  - Hidden assumptions in the diff',
-    '  - Edge cases (empty input, null, huge, concurrent, malformed)',
-    '  - Subtle correctness bugs the author would not have noticed',
-    '  - Inconsistencies with the project conventions',
-    '',
-    '--- PRIOR FINDINGS (JSON) ---',
-    args.priorFindingsJson,
-    '',
-    '--- DIFF ---',
-    args.diff,
-    '',
-    'Return the FULL updated set (kept + revised + new), not a diff. Drop anything you decide is not load-bearing.',
-    '',
-    JSON_CONTRACT,
-  ].join('\n');
-}
-
-export function buildPermutePrompt(args: {
-  ctx: ProjectContext;
-  depth: ReasoningDepth;
-  diff: string;
-  lang: Lang;
-}): string {
-  return [
-    buildSystemPreamble(args.ctx, args.depth, args.lang),
-    '',
-    '--- PASS 3 — PERMUTATION & ALTERNATIVES ---',
-    'For each non-trivial change in the diff, produce findings that propose at least one alternative implementation, weighing trade-offs honestly.',
-    'Use category "architecture" or "maintainability". Severity should usually be "minor" unless the alternative is clearly better.',
-    'If the current approach is genuinely the best choice, do not invent an alternative — produce a "praise" finding instead.',
-    '',
-    '--- DIFF ---',
-    args.diff,
-    '',
-    JSON_CONTRACT,
-  ].join('\n');
-}
-
-export function buildSecurityPrompt(args: { ctx: ProjectContext; diff: string; lang: Lang }): string {
   return [
     buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
-    '--- SECURITY PASS ---',
+    '--- PHASE B — SECURITY PASS ---',
     'Audit ONLY for security concerns: injection (SQL, command, prompt), XSS, SSRF, path traversal, broken auth/authz, secret leakage, unsafe deserialization, weak crypto, missing input validation at trust boundaries, supply-chain risk in new dependencies, race conditions with security impact, insecure defaults.',
+    'Focus on files where kind ∈ {new-feature, config, deps, migration} or blastRadius ∈ {module, cross-cutting}. You can skim/skip docs/style/test files unless they reveal a credential.',
     'If there are no real security issues, return findings: [] and say so in the summary.',
     '',
+    changeMapBlock(args.changeMap),
+    antiDuplicationBlock(args.priorFindings),
     '--- DIFF ---',
     args.diff,
     '',
     JSON_CONTRACT,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-export function buildPerformancePrompt(args: { ctx: ProjectContext; diff: string; lang: Lang }): string {
+export function buildPerformancePrompt(args: {
+  ctx: ProjectContext;
+  diff: string;
+  changeMap: ChangeMapEntry[];
+  priorFindings: FindingIndexEntry[];
+  lang: Lang;
+}): string {
   return [
     buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
-    '--- PERFORMANCE PASS ---',
+    '--- PHASE B — PERFORMANCE PASS ---',
     'Audit ONLY for performance concerns: hot-loop inefficiencies, N+1 queries, repeated work, unnecessary allocations, blocking I/O on hot paths, missing indexes, cache-busting patterns, accidental quadratic behaviour, large synchronous work in async contexts.',
-    'Be honest about whether the perf concern is real for THIS code path (estimate frequency / data size).',
+    'Be honest about whether the perf concern is real for THIS code path (estimate frequency / data size). Files marked kind=docs/style/test are usually not worth flagging unless the cost is obvious.',
     '',
+    changeMapBlock(args.changeMap),
+    antiDuplicationBlock(args.priorFindings),
     '--- DIFF ---',
     args.diff,
     '',
     JSON_CONTRACT,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-export function buildAccessibilityPrompt(args: { ctx: ProjectContext; diff: string; uiFiles: string[]; lang: Lang }): string {
+export function buildAccessibilityPrompt(args: {
+  ctx: ProjectContext;
+  diff: string;
+  uiFiles: string[];
+  changeMap: ChangeMapEntry[];
+  priorFindings: FindingIndexEntry[];
+  lang: Lang;
+}): string {
   return [
     buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
-    '--- ACCESSIBILITY PASS ---',
+    '--- PHASE B — ACCESSIBILITY PASS ---',
     'Audit ONLY for accessibility (a11y) concerns. Focus on the UI files touched in the diff:',
     `${args.uiFiles.length} UI files in this diff: ${args.uiFiles.slice(0, 30).join(', ')}${args.uiFiles.length > 30 ? '…' : ''}`,
     '',
@@ -259,20 +319,65 @@ export function buildAccessibilityPrompt(args: { ctx: ProjectContext; diff: stri
     '',
     'If the diff has no UI/CSS/markup changes, return findings: [].',
     '',
+    changeMapBlock(args.changeMap),
+    antiDuplicationBlock(args.priorFindings),
     '--- DIFF ---',
     args.diff,
     '',
     JSON_CONTRACT,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 }
 
-export function buildGapsPrompt(args: { ctx: ProjectContext; diff: string; conventions: string; changedFiles: DiffFile[]; lang: Lang }): string {
-  const fileSummary = args.changedFiles.slice(0, 60).map((f) => `${f.status[0].toUpperCase()} ${f.path}`).join('\n');
+export function buildTestsPrompt(args: {
+  ctx: ProjectContext;
+  diff: string;
+  changeMap: ChangeMapEntry[];
+  priorFindings: FindingIndexEntry[];
+  lang: Lang;
+}): string {
   return [
     buildSystemPreamble(args.ctx, 'deep', args.lang),
     '',
-    '--- GAPS PASS ---',
+    '--- PHASE B — TESTS PASS ---',
+    'Audit ONLY for test coverage and quality: missing tests for new logic, tests that assert on implementation details, tests that would still pass if the code under test were deleted, flaky patterns (sleeps, real time, real network), missing edge cases, fixtures that hide bugs.',
+    'Anchor findings to the file that SHOULD have a test (the source file), not to a hypothetical test file that does not exist.',
+    'If there are genuinely no test concerns, return findings: [].',
+    '',
+    changeMapBlock(args.changeMap),
+    antiDuplicationBlock(args.priorFindings),
+    '--- DIFF ---',
+    args.diff,
+    '',
+    JSON_CONTRACT,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+// ─── PHASE D — COMPLETENESS & ALTERNATIVES ────────────────────────────
+
+export function buildGapsPrompt(args: {
+  ctx: ProjectContext;
+  diff: string;
+  conventions: string;
+  changedFiles: DiffFile[];
+  changeMap: ChangeMapEntry[];
+  priorFindings: FindingIndexEntry[];
+  lang: Lang;
+}): string {
+  const fileSummary = args.changedFiles
+    .slice(0, 60)
+    .map((f) => `${f.status[0].toUpperCase()} ${f.path}`)
+    .join('\n');
+  return [
+    buildSystemPreamble(args.ctx, 'deep', args.lang),
+    '',
+    '--- PHASE D — GAPS (what is MISSING) ---',
     'Audit ONLY for what is MISSING — things the author probably should have touched but did not. This is the "complete the picture" lens.',
+    '',
+    'You will see prior findings below. Your job is to find what is missing BEYOND those — do not re-report a missing test/doc/migration that another pass already flagged. Anything you emit here should be net-new.',
     '',
     'For every meaningful change, ask:',
     '- Did they add a new endpoint / API method? Then: client/SDK regenerated? OpenAPI spec updated? Postman / fixtures? Auth/permissions enforced? Rate limit applied?',
@@ -288,6 +393,8 @@ export function buildGapsPrompt(args: { ctx: ProjectContext; diff: string; conve
     '',
     'Lean on project context: if the project clearly has tests but the diff has no tests, that is a gap. If CLAUDE.md mentions a pattern that this change ignores, that is a gap.',
     '',
+    changeMapBlock(args.changeMap),
+    antiDuplicationBlock(args.priorFindings),
     '--- DIFF FILE SUMMARY ---',
     fileSummary,
     '',
@@ -299,11 +406,123 @@ export function buildGapsPrompt(args: { ctx: ProjectContext; diff: string; conve
     '',
     'For each gap, produce a finding anchored to the most relevant changed file + line (the place where the missing piece SHOULD have been added or referenced). If you cannot anchor precisely, anchor to line 1 of the file most central to the change and lower confidence to "low".',
     'Use category "other" unless one of these fits better: "tests", "docs", "api-contract", "data-integrity", "architecture", "accessibility".',
-    'If nothing is genuinely missing, return findings: [].',
+    'If nothing is genuinely missing beyond what prior passes caught, return findings: [].',
+    '',
+    JSON_CONTRACT,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+export function buildPermutePrompt(args: {
+  ctx: ProjectContext;
+  depth: ReasoningDepth;
+  diff: string;
+  criticalFindings: FindingIndexEntry[];
+  lang: Lang;
+}): string {
+  const focus = args.criticalFindings
+    .slice(0, 12)
+    .map(
+      (f, i) =>
+        `  ${i + 1}. [${f.file}:${f.startLine}${f.endLine !== f.startLine ? `-${f.endLine}` : ''}] (${f.severity}/${f.category}) ${truncate(f.title, 100)}`,
+    )
+    .join('\n');
+  return [
+    buildSystemPreamble(args.ctx, args.depth, args.lang),
+    '',
+    '--- PHASE D — PERMUTATION & ALTERNATIVES ---',
+    'For each of the following CRITICAL/MAJOR findings, propose at least one alternative implementation that would avoid or mitigate the issue, weighing trade-offs honestly.',
+    'Do NOT alternativize the entire diff — focus only on these load-bearing findings. The goal is to give the author actionable options for the things that really matter.',
+    'Use category "architecture" or "maintainability". Severity should usually be "minor" (the alternative is advice, not a defect) unless the alternative reveals a SECOND defect.',
+    'If a finding\'s current approach is genuinely the best trade-off given the constraints, say so as a "praise"-severity finding that explains why other options are worse — that is also valuable.',
+    '',
+    '--- FINDINGS TO ALTERNATIVIZE ---',
+    focus || '(none — phase D permute should not have been invoked)',
+    '',
+    '--- DIFF ---',
+    args.diff,
     '',
     JSON_CONTRACT,
   ].join('\n');
 }
+
+// ─── PHASE E — CRITIQUE & SUMMARY ─────────────────────────────────────
+
+export function buildCritiquePrompt(args: {
+  ctx: ProjectContext;
+  depth: ReasoningDepth;
+  priorFindingsJson: string;
+  diff: string;
+  lang: Lang;
+}): string {
+  return [
+    buildSystemPreamble(args.ctx, args.depth, args.lang),
+    '',
+    '--- PHASE E — SELF-CRITIQUE ---',
+    'Below are the consolidated findings from all earlier phases. Your job is to harden this list before it reaches the author.',
+    '',
+    'For EACH finding decide:',
+    '  KEEP   — load-bearing, evidence is strong, severity matches impact.',
+    '  REVISE — refine the wording, severity, or fix; the underlying point stands.',
+    '  DROP   — not actually a problem, or so weak it would waste the reader\'s time.',
+    '  MERGE  — two findings describe the same symptom from different angles; combine them.',
+    '',
+    'DROP rules (be ruthless — author trust is the scarce resource):',
+    '  - DROP if confidence="low" AND severity ∈ {minor, nit}.',
+    '  - DROP if the finding is "consider X" without concrete evidence of an actual problem in this diff.',
+    '  - DROP if it only restates a coding-style preference a formatter/linter would catch.',
+    '  - DROP if the evidence quote does not actually demonstrate the claimed problem.',
+    '  - DROP if it speculates about behaviour in code that is not in the diff or in the loaded context.',
+    '',
+    'MERGE rules:',
+    '  - If two findings target the same file:line ± 3 and the same root cause, merge into one. Keep the higher severity and the strongest evidence.',
+    '  - Preserve "Related:" relationships — if a related finding stands on its own, keep it as a separate finding with the prefix; do not merge it into its parent.',
+    '',
+    'Also: add any NEW findings that all earlier passes missed. Look especially for:',
+    '  - Hidden assumptions in the diff',
+    '  - Edge cases (empty input, null, huge, concurrent, malformed)',
+    '  - Subtle correctness bugs the author would not have noticed',
+    '  - Inconsistencies with the project conventions',
+    '',
+    '--- PRIOR FINDINGS (JSON) ---',
+    args.priorFindingsJson,
+    '',
+    '--- DIFF ---',
+    args.diff,
+    '',
+    'Return the FULL updated set (kept + revised + new + merged), not a diff. Drop anything that does not pass the DROP rules above.',
+    '',
+    JSON_CONTRACT,
+  ].join('\n');
+}
+
+export function buildSummaryPrompt(args: {
+  ctx: ProjectContext;
+  depth: ReasoningDepth;
+  allFindingsJson: string;
+  diffStat: { filesChanged: number; insertions: number; deletions: number };
+  lang: Lang;
+}): string {
+  return [
+    buildSystemPreamble(args.ctx, args.depth, args.lang),
+    '',
+    '--- PHASE E — FINAL SUMMARY ---',
+    'You will be given the consolidated findings from earlier phases. Produce ONLY the summary object (no findings).',
+    '',
+    `Diff stat: ${args.diffStat.filesChanged} files, +${args.diffStat.insertions} / -${args.diffStat.deletions}`,
+    '',
+    'Consolidated findings:',
+    args.allFindingsJson,
+    '',
+    'Return JSON of this exact shape:',
+    `{ "summary": { "overallVerdict": "...", "executiveSummary": "...", "topConcerns": [...], "strengths": [...], "riskScore": 0 }, "findings": [] }`,
+    '',
+    'No prose outside the JSON.',
+  ].join('\n');
+}
+
+// ─── PHASE A.0 — STRUCTURAL EXPLORATION (unchanged) ───────────────────
 
 export function buildStructuralExplorationPrompt(args: {
   ctx: ProjectContext;
@@ -365,42 +584,32 @@ export function buildContextSection(extraFiles: Array<{ path: string; content: s
   return parts.join('\n');
 }
 
-export function buildTestsPrompt(args: { ctx: ProjectContext; diff: string; lang: Lang }): string {
-  return [
-    buildSystemPreamble(args.ctx, 'deep', args.lang),
-    '',
-    '--- TESTS PASS ---',
-    'Audit ONLY for test coverage and quality: missing tests for new logic, tests that assert on implementation details, tests that would still pass if the code under test were deleted, flaky patterns (sleeps, real time, real network), missing edge cases, fixtures that hide bugs.',
-    'If there are genuinely no test concerns, return findings: [].',
-    '',
-    '--- DIFF ---',
-    args.diff,
-    '',
-    JSON_CONTRACT,
-  ].join('\n');
-}
+// ─── Helpers exported for orchestrator use ────────────────────────────
 
-export function buildSummaryPrompt(args: {
-  ctx: ProjectContext;
-  depth: ReasoningDepth;
-  allFindingsJson: string;
-  diffStat: { filesChanged: number; insertions: number; deletions: number };
-  lang: Lang;
-}): string {
-  return [
-    buildSystemPreamble(args.ctx, args.depth, args.lang),
-    '',
-    '--- FINAL SUMMARY PASS ---',
-    'You will be given the consolidated findings from earlier passes. Produce ONLY the summary object (no findings).',
-    '',
-    `Diff stat: ${args.diffStat.filesChanged} files, +${args.diffStat.insertions} / -${args.diffStat.deletions}`,
-    '',
-    'Consolidated findings:',
-    args.allFindingsJson,
-    '',
-    'Return JSON of this exact shape:',
-    `{ "summary": { "overallVerdict": "...", "executiveSummary": "...", "topConcerns": [...], "strengths": [...], "riskScore": 0 }, "findings": [] }`,
-    '',
-    'No prose outside the JSON.',
-  ].join('\n');
+/**
+ * Build the compact FindingIndexEntry list passed to specialists / gaps /
+ * permute so the model can avoid duplicating prior work. Excludes praise
+ * findings (no value in telling specialists "don't duplicate this praise").
+ */
+export function toFindingIndex(
+  findings: Array<{
+    file: string;
+    range: { startLine: number; endLine: number };
+    severity: FindingIndexEntry['severity'];
+    category: FindingIndexEntry['category'];
+    title: string;
+    pass: FindingIndexEntry['pass'];
+  }>,
+): FindingIndexEntry[] {
+  return findings
+    .filter((f) => f.severity !== 'praise')
+    .map((f) => ({
+      file: f.file,
+      startLine: f.range.startLine,
+      endLine: f.range.endLine,
+      severity: f.severity,
+      category: f.category,
+      title: f.title,
+      pass: f.pass,
+    }));
 }
