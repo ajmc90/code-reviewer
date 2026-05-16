@@ -1,26 +1,35 @@
 {
   "name": "claude-branch-reviewer",
-  "displayName": "%displayName%",
+  "displayName": "Claude Branch Reviewer — AI Code Review",
   "description": "%description%",
   "version": "0.1.0",
-  "publisher": "andres",
+  "publisher": "ajmc90",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other",
+    "AI",
     "SCM Providers",
     "Linters",
-    "AI"
+    "Other"
   ],
   "keywords": [
     "claude",
     "claude code",
     "code review",
+    "pull request",
     "git",
     "branch",
-    "ai"
+    "ai",
+    "anthropic",
+    "diff",
+    "review"
   ],
+  "galleryBanner": {
+    "color": "#1f1b2e",
+    "theme": "dark"
+  },
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -304,7 +313,12 @@
   "packageManager": "pnpm@10.28.2",
   "repository": {
     "type": "git",
-    "url": "local"
+    "url": "https://github.com/ajmc90/code-reviewer.git"
   },
+  "bugs": {
+    "url": "https://github.com/ajmc90/code-reviewer/issues"
+  },
+  "homepage": "https://github.com/ajmc90/code-reviewer#readme",
+  "qna": "https://github.com/ajmc90/code-reviewer/discussions",
   "license": "MIT"
 }

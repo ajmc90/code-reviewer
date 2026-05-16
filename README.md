@@ -6,10 +6,11 @@
 
 No API key. No extra cost. Just your existing Claude subscription.
 
+[![Marketplace](https://img.shields.io/visual-studio-marketplace/v/ajmc90.claude-branch-reviewer?label=Marketplace&logo=visualstudiocode&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=ajmc90.claude-branch-reviewer)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/ajmc90.claude-branch-reviewer?color=007ACC)](https://marketplace.visualstudio.com/items?itemName=ajmc90.claude-branch-reviewer)
 [![VS Code](https://img.shields.io/badge/VS_Code-1.85+-blue?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
 [![Claude](https://img.shields.io/badge/Powered_by-Claude_Code_CLI-7c5cff)](https://docs.anthropic.com/en/docs/claude-code)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
-[![Status](https://img.shields.io/badge/status-active-success.svg)](#)
 
 </div>
 
@@ -25,6 +26,13 @@ No API key. No extra cost. Just your existing Claude subscription.
 - **🎨 Modern review panel** — toggleable passes, severity + category filters, drag-resizable layout, collapsible sidebar.
 - **🧩 Adapts to your project** — auto-detects language, framework, tests, and reads `CLAUDE.md` / `README.md` / `CONTRIBUTING.md` / `ARCHITECTURE.md`.
 - **🔐 No API key** — talks to the `claude` CLI you're already logged into.
+
+---
+
+## Install
+
+- **VS Code Marketplace** — search for *“Claude Branch Reviewer”* or [install directly](https://marketplace.visualstudio.com/items?itemName=ajmc90.claude-branch-reviewer).
+- **CLI** — `code --install-extension ajmc90.claude-branch-reviewer`
 
 ---
 
