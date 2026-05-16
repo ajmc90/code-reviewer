@@ -124,6 +124,10 @@ Each finding includes:
 - **"Related" link** when a later pass refines a prior finding instead of duplicating it
 - Gutter markers + end-of-line tags + rich hover
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/finding-detail.png" alt="Expanded finding card showing Problem on the left and Solution on the right" width="100%" />
+</p>
+
 ### Apply Fix — interactive preview
 
 Hitting **Apply Fix** on a finding doesn't write to disk immediately. Instead it opens a VS Code diff editor: your file on the left, the proposed fix on the right. You can **edit the right side** before applying — Claude's suggestion is a starting point, not a final answer. The editor title gets two actions:
