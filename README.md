@@ -11,6 +11,7 @@ No API key. No extra cost. Just your existing Claude subscription.
 [![VS Code](https://img.shields.io/badge/VS_Code-1.85+-blue?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
 [![Claude](https://img.shields.io/badge/Powered_by-Claude_Code_CLI-7c5cff)](https://docs.anthropic.com/en/docs/claude-code)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](#license)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy_me_a_coffee-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/ajmc90)
 
 </div>
 
@@ -25,6 +26,7 @@ No API key. No extra cost. Just your existing Claude subscription.
 ## Highlights
 
 - **🔬 Multi-pass reasoning** — five phases (discovery → specialists → consolidation → completeness → critique), each with a job. The final pass critiques the rest.
+- **🧪 Self-critique with an audit trail** — the critique pass labels every prior finding **keep / revise / drop / merge** with an explicit reason. Dropped and merged findings don't vanish silently: they live under a dedicated **Revised** chip with the reasoning, so you can second-guess critique instead of trusting it blindly.
 - **📍 Pinpoint anchoring** — every finding maps to `file:start-end`. One click jumps to the exact range.
 - **🧠 Shows its work** — title, reasoning, questions raised, alternatives considered, evidence quotes, suggested fix.
 - **🎨 Modern review panel** — toggleable passes, severity + category filters, drag-resizable layout, collapsible sidebar, sidebar dashboard for at-a-glance status.
@@ -78,7 +80,7 @@ A second-screen-worthy UI built into VS Code.
 | **Log** | Raw streaming output, severity-colored. Copy or clear. |
 | **Executive summary** | Verdict, risk score, top concerns, strengths — emitted once the review finishes. |
 | **Findings grid** | Problem ↔ Solution cards. Severity ribbon, category badge, jump-to-code, apply fix, ask follow-up, dismiss / restore. Per-card EN/ES chip translates that finding on demand. "Related" badges link refinements back to their original finding. |
-| **Filters** | Severity chips (critical / major / minor / nit / praise / silenced) + category chips (security, accessibility, performance, …) with live counts + free-text search. Combine freely. |
+| **Filters** | Severity chips (critical / major / minor / nit / praise / silenced / **revised**) + category chips (security, accessibility, performance, …) with live counts + free-text search. Combine freely. The *Revised* chip surfaces critique's audit trail; on the **All** filter, silenced + revised findings drop below a labeled separator so the main severity flow stays focused. |
 | **Collapse + resize** | Click ‹ to collapse the left pane into a vertical rail showing branches, current pass, spinner, and live severity counts. Drag the gutter between panes to resize (or `←/→` while focused, `Home/End` for min/max, dbl-click to reset). Width and collapse state persist. |
 
 ### Sidebar dashboard
@@ -110,7 +112,7 @@ Passes are organized into five phases. The pipeline goes **A → B → C → D �
 | **C · Consolidation** | *(local, no CLI)* | Semantic dedupe + clustering of findings from earlier passes. Surfaces a "−N merged" badge so the count drop is explained. |
 | **D · Completeness** | **Gaps** | Pieces that should exist but don't — error handling, null checks, observability |
 | | **Alternatives** | Honest trade-off analysis for non-trivial changes (deep / obsessive depth only; auto-skipped when there are no critical/major findings to alternativize) |
-| **E · Critique + summary** | **Self-critique** | Re-reads its own findings; drops noise, sharpens wording, fills gaps |
+| **E · Critique + summary** | **Self-critique** | Tags every prior finding **keep / revise / drop / merge** with a reason. Dropped + merged ones go to the *Revised* chip (audit trail); revised ones keep a snapshot of what changed. |
 | | **Final summary** | Verdict · risk score · executive summary · top concerns · strengths |
 
 Each finding includes:
@@ -143,6 +145,17 @@ Findings you dismiss are remembered. The dismiss popup offers two scopes:
 - **Silence this pattern everywhere** — matches by `category + title`. Demotes any future finding with that signature anywhere in the project.
 
 Matched findings come back as `severity: 'silenced'` with a 🔕 badge — visible (so you know it returned), muted (so it doesn't fight real-severity findings for attention). One click **Restore** un-silences. The command palette exposes **Unsilence a Finding…** to inspect/remove individual rules, and **Clear All Silenced Findings** to nuke the memory.
+
+### Self-critique audit trail
+
+The critique pass doesn't quietly delete findings. For every prior finding it emits one of four decisions:
+
+- **keep** — load-bearing as-is.
+- **revise** — wording, severity, or category changed. The card keeps a snapshot of the pre-critique version so you can compare.
+- **drop** — judged not load-bearing for this branch. Stays in the panel with a `DROPPED` badge.
+- **merge** — folded into another finding. Stays with a `MERGED` badge and a link to the survivor.
+
+Dropped and merged findings don't appear in the main severity flow — they sit behind the **Revised** chip in the filter row. The sidebar progress card shows the delta in real time (`−6 dropped · −4 merged · 2 revised`), so the count drop is explained, not mysterious. Every decision has a reason from critique attached, surfaced inside the expanded card as a **Self-critique's review** section. Findings that critique referenced by an internal scaffolding id (e.g. `f3 describes the same SQL injection as f2`) get the ids substituted for the actual finding titles before display.
 
 ---
 
@@ -354,6 +367,24 @@ Package as a `.vsix`:
 pnpm run package
 code --install-extension claude-branch-reviewer-0.1.0.vsix
 ```
+
+---
+
+## Support the project ☕
+
+This extension is free, MIT-licensed, and doesn't talk to any backend of its own — your Claude subscription does all the work. But building it, fixing your bug reports, and shipping new passes happens on nights and weekends, fueled by **a dangerous amount of coffee**.
+
+If Claude Branch Reviewer caught a bug before code review did, saved you an hour of "what is this PR even doing", or just made your reviewer's job a little less painful — consider buying me a coffee.
+
+<p align="center">
+  <a href="https://buymeacoffee.com/ajmc90">
+    <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20me%20a%20coffee&emoji=☕&slug=ajmc90&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy me a coffee" />
+  </a>
+</p>
+
+Stars on GitHub and reviews on the Marketplace are also a great free way to help — they make the project visible to other devs who could use it.
+
+> **Pro tip:** every coffee unlocks ~30 minutes of staring at TypeScript errors I will fix for you. ☕ = 🐛 ⬇
 
 ---
 

@@ -1,4 +1,4 @@
-import { ReviewResult } from '../types';
+import { ReviewResult, isVisibleFinding } from '../types';
 import { Lang, t } from '../i18n';
 
 export function renderReportMarkdown(r: ReviewResult, lang: Lang): string {
@@ -26,8 +26,9 @@ export function renderReportMarkdown(r: ReviewResult, lang: Lang): string {
     for (const c of s.strengths) lines.push(`- ${c}`);
     lines.push('');
   }
-  lines.push(`## ${m('md.findings')} (${r.findings.length})`);
-  for (const f of r.findings) {
+  const visible = r.findings.filter(isVisibleFinding);
+  lines.push(`## ${m('md.findings')} (${visible.length})`);
+  for (const f of visible) {
     lines.push('');
     lines.push(`### [${f.severity.toUpperCase()}] ${f.title}`);
     lines.push(`*${f.file}:${f.range.startLine}-${f.range.endLine}* · category: \`${f.category}\` · confidence: \`${f.confidence}\` · pass: \`${f.pass}\``);
@@ -60,6 +61,35 @@ export function renderReportMarkdown(r: ReviewResult, lang: Lang): string {
       lines.push('```');
       lines.push(f.suggestedFix.replacement);
       lines.push('```');
+    }
+  }
+
+  // Critique audit trail — only emit when there's something to show. Keeps
+  // the export focused for branches where critique didn't reshape the list.
+  const dropped = r.findings.filter((f) => f.decision === 'drop');
+  const merged = r.findings.filter((f) => f.decision === 'merge');
+  if (dropped.length > 0 || merged.length > 0) {
+    lines.push('');
+    lines.push(`## ${m('md.critiqueDecisions')}`);
+    if (dropped.length > 0) {
+      lines.push('');
+      lines.push(`### ${m('md.critiqueDropped')} (${dropped.length})`);
+      for (const f of dropped) {
+        lines.push('');
+        lines.push(`- **${f.title}** *(${f.file}:${f.range.startLine}, from \`${f.pass}\` pass)*`);
+        if (f.decisionReason) lines.push(`  > ${f.decisionReason}`);
+      }
+    }
+    if (merged.length > 0) {
+      lines.push('');
+      lines.push(`### ${m('md.critiqueMerged')} (${merged.length})`);
+      for (const f of merged) {
+        const target = f.mergedIntoId ? r.findings.find((x) => x.id === f.mergedIntoId) : null;
+        const tail = target ? ` → into "${target.title}" *(${target.file}:${target.range.startLine})*` : '';
+        lines.push('');
+        lines.push(`- **${f.title}** *(${f.file}:${f.range.startLine})*${tail}`);
+        if (f.decisionReason) lines.push(`  > ${f.decisionReason}`);
+      }
     }
   }
   return lines.join('\n');

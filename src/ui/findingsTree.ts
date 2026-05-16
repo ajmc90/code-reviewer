@@ -50,7 +50,9 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<Node> {
   attentionCount(): number {
     if (!this.result) return 0;
     return this.result.findings.filter(
-      (f) => !f.dismissed && (f.severity === 'critical' || f.severity === 'major'),
+      (f) => !f.dismissed
+        && f.decision !== 'drop' && f.decision !== 'merge'
+        && (f.severity === 'critical' || f.severity === 'major'),
     ).length;
   }
 
@@ -86,7 +88,9 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<Node> {
   getChildren(element?: Node): Node[] {
     if (!this.result) return [];
     if (!element) {
-      const findings = this.result.findings.filter((f) => !f.dismissed);
+      const findings = this.result.findings.filter(
+        (f) => !f.dismissed && f.decision !== 'drop' && f.decision !== 'merge',
+      );
       if (this.groupBy === 'severity') {
         const groups: Node[] = [];
         for (const sev of SEVERITY_ORDER) {

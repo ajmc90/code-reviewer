@@ -52,6 +52,17 @@ export interface TranslatedFindingFields {
   alternativesConsidered: string[];
   evidence: string[];
   suggestedFix?: { description: string; replacement: string };
+  /**
+   * Self-critique's verdict prose for this finding, when present. Translated
+   * alongside the main fields so the "Self-critique's review" section in the
+   * card doesn't show English reasoning while everything else is in Spanish.
+   */
+  decisionReason?: string;
+  /**
+   * Pre-critique snapshot for revised findings — only the prose fields are
+   * translated (severity/category/confidence/pass are enums/identifiers).
+   */
+  originalFinding?: { title: string; description: string; reasoning: string };
 }
 
 export interface Finding {
@@ -91,6 +102,39 @@ export interface Finding {
   translations?: Partial<Record<'en' | 'es', TranslatedFindingFields>>;
   /** Per-row language override set by the user via the in-card chip. */
   displayLang?: 'en' | 'es';
+  /**
+   * Critique decision applied to this finding. Set only by the critique pass.
+   *  'keep'    — finding survives as-is.
+   *  'revise'  — the user-visible fields (severity/title/description/etc.) were
+   *              updated by critique. originalFinding preserves the pre-revision
+   *              snapshot so the UI can show what changed.
+   *  'drop'    — critique judged this a false positive or low-value noise.
+   *              The finding stays in state.findings (so the user can audit the
+   *              decision) but is hidden from the main grid; surfaces only
+   *              under the "Revised" filter chip.
+   *  'merge'   — critique folded this finding into another (mergedIntoId).
+   *              Same visibility as 'drop'.
+   * When this field is missing, the finding is treated as 'keep'.
+   */
+  decision?: 'keep' | 'revise' | 'drop' | 'merge';
+  /** Short justification from critique for revise/drop/merge. */
+  decisionReason?: string;
+  /** If decision='merge', the id of the finding that absorbed this one. */
+  mergedIntoId?: string;
+  /**
+   * Snapshot of this finding BEFORE critique modified it. Set only when
+   * decision='revise'. Lets the UI show "Critique changed X → Y" detail.
+   * The snapshot omits volatile/large fields (translations) so it stays light.
+   */
+  originalFinding?: {
+    severity: Severity;
+    title: string;
+    description: string;
+    reasoning: string;
+    category: Category;
+    confidence: 'high' | 'medium' | 'low';
+    pass: Finding['pass'];
+  };
 }
 
 export interface ReviewSummary {
@@ -112,6 +156,19 @@ export interface ReviewResult {
   findings: Finding[];
   passesRun: string[];
   durationMs: number;
+}
+
+/**
+ * A finding is "visible" in the main grid when it isn't dismissed and wasn't
+ * dropped/merged away by critique. Drop/merge findings still live in
+ * state.findings (so the user can audit critique's decisions from the
+ * "Revised" filter chip), but every count and the default grid filter must
+ * exclude them.
+ */
+export function isVisibleFinding(f: Pick<Finding, 'dismissed' | 'decision'>): boolean {
+  if (f.dismissed) return false;
+  if (f.decision === 'drop' || f.decision === 'merge') return false;
+  return true;
 }
 
 export interface ProjectContext {

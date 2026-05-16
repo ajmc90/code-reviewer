@@ -121,6 +121,24 @@ code{
 .card__meta .meta-pass{ color: var(--accent); font-weight: 600 }
 .card__meta .meta-sep{ color: var(--fg-subtle) }
 .card__meta .meta-time{ margin-left: auto }
+/* Self-critique decision delta — appears below .card__meta while running.
+   The line stays muted so it reads as supporting context, not a status. */
+.card__delta{
+  display:flex; flex-wrap:wrap; align-items:center; gap: 4px;
+  margin-top: 4px;
+  font-size: var(--t-xs);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+/* Sidebar Stop button: keep it aligned to the *first* line of the title even
+   when the title wraps. Without align-self the .card__head's flex-start
+   alignment leaves the button visibly floating away from the text. */
+.card__head .btn--danger.btn--sm{
+  align-self: flex-start;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
 .card__h{
   font-size: 10px;
   font-weight: 700;

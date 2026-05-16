@@ -1,4 +1,4 @@
-import { Finding, ProjectContext, ReviewOptions, ReviewSummary } from '../../../types';
+import { Finding, ProjectContext, ReviewOptions, ReviewSummary, isVisibleFinding } from '../../../types';
 import { buildSummaryPrompt } from '../../../claude/prompts';
 import { parseClaudeOutput } from '../../../claude/parser';
 import { OrchestratorDeps } from '../types';
@@ -6,8 +6,9 @@ import { runCli } from '../cli';
 import { stripIdForPrompt } from '../helpers';
 
 function fallbackSummary(findings: Finding[]): ReviewSummary {
-  const critical = findings.filter((f) => f.severity === 'critical').length;
-  const major = findings.filter((f) => f.severity === 'major').length;
+  const visible = findings.filter(isVisibleFinding);
+  const critical = visible.filter((f) => f.severity === 'critical').length;
+  const major = visible.filter((f) => f.severity === 'major').length;
   const verdict: ReviewSummary['overallVerdict'] = critical > 0 ? 'block' : major > 0 ? 'needs-changes' : 'approve-with-comments';
   return {
     branch: '',
@@ -16,10 +17,10 @@ function fallbackSummary(findings: Finding[]): ReviewSummary {
     linesAdded: 0,
     linesRemoved: 0,
     overallVerdict: verdict,
-    executiveSummary: `Review produced ${findings.length} findings across multiple passes.`,
-    topConcerns: findings.filter((f) => f.severity === 'critical' || f.severity === 'major').slice(0, 6).map((f) => f.title),
-    strengths: findings.filter((f) => f.severity === 'praise').slice(0, 3).map((f) => f.title),
-    riskScore: Math.min(100, critical * 25 + major * 8 + findings.length),
+    executiveSummary: `Review produced ${visible.length} findings across multiple passes.`,
+    topConcerns: visible.filter((f) => f.severity === 'critical' || f.severity === 'major').slice(0, 6).map((f) => f.title),
+    strengths: visible.filter((f) => f.severity === 'praise').slice(0, 3).map((f) => f.title),
+    riskScore: Math.min(100, critical * 25 + major * 8 + visible.length),
     generatedAt: new Date().toISOString(),
   };
 }
@@ -31,10 +32,14 @@ export async function makeSummary(
   stat: { filesChanged: number; insertions: number; deletions: number },
   findings: Finding[],
 ): Promise<ReviewSummary> {
+  // The summary prompt should only see findings that will actually reach the
+  // author — feeding critique-dropped/merged ones in just produces a stale
+  // executive summary that contradicts the grid the user sees.
+  const visible = findings.filter(isVisibleFinding);
   const prompt = buildSummaryPrompt({
     ctx,
     depth: opts.depth,
-    allFindingsJson: JSON.stringify(findings.map(stripIdForPrompt)),
+    allFindingsJson: JSON.stringify(visible.map(stripIdForPrompt)),
     diffStat: stat,
     lang: opts.lang,
   });

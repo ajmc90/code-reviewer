@@ -1,7 +1,7 @@
-import { PartialReviewState, ReviewPhase, Finding } from '../../types';
+import { PartialReviewState, ReviewPhase, Finding, isVisibleFinding } from '../../types';
 import { PassFailureDecision, PassName } from '../events';
 import { OrchestratorDeps } from './types';
-import { linkRelatedFindings } from '../../claude/parser';
+import { dedupeFindings, linkRelatedFindings } from '../../claude/parser';
 import { ReviewPausedError } from './errors';
 import { report, checkCancel } from './helpers';
 
@@ -80,7 +80,7 @@ export async function executePassWithDecisions(
         reason: state.pausedReason,
         completedPasses: [...state.completedPasses],
         skippedPasses: [...state.skippedPasses],
-        findingCount: state.findings.length,
+        findingCount: state.findings.filter(isVisibleFinding).length,
         at: Date.now(),
       });
       throw new ReviewPausedError(state);
@@ -113,7 +113,18 @@ export async function runPlannedPass(
   }
 
   await executePassWithDecisions(deps, step.pass, step.label, step.increment, state, async () => {
-    const findings = await step.run();
+    const rawFindings = await step.run();
+    // Dedupe within this pass's own output before doing anything else. Claude
+    // sometimes returns the same finding twice in a single response (slightly
+    // different wording, same file+range+category); without this step those
+    // duplicates would survive all the way to the UI because the Phase C
+    // consolidation runs cross-pass and only fires once. Per-pass dedupe is
+    // safe because findings from one pass share the same `pass` tag — we are
+    // not collapsing distinct-angle reports from different specialists.
+    const findings = dedupeFindings(rawFindings);
+    if (findings.length < rawFindings.length) {
+      deps.log(`[${step.pass}] intra-pass dedupe: ${rawFindings.length} → ${findings.length}`);
+    }
     // Link any "Related: ..." titles back to existing findings BEFORE appending.
     linkRelatedFindings(findings, state.findings);
     if (step.replaceAll && findings.length > 0) {
@@ -121,7 +132,10 @@ export async function runPlannedPass(
     } else {
       state.findings.push(...findings);
     }
-    for (const f of findings) deps.events?.emit({ kind: 'findingAdded', finding: f, at: Date.now() });
+    const replaceAll = !!step.replaceAll;
+    for (const f of findings) {
+      deps.events?.emit({ kind: 'findingAdded', finding: f, replaceAll, at: Date.now() });
+    }
     return findings.length;
   });
 }

@@ -1,4 +1,4 @@
-import { PartialReviewState, ReviewOptions, ReviewResult } from '../../types';
+import { PartialReviewState, ReviewOptions, ReviewResult, isVisibleFinding } from '../../types';
 import { PassName } from '../events';
 import { OrchestratorDeps } from './types';
 import { bootstrapState, hydrateForResume, computePlannedPasses } from './state';
@@ -41,7 +41,10 @@ export class ReviewOrchestrator {
 
     await runRemainingPasses(this.deps, state);
 
-    report(this.deps.progress, this.deps.log, 'Generating executive summary...', 5);
+    // Match the message style of every other pass (just the pass name) so the
+    // VS Code notification tooltip reads consistently as "Reviewing X: Final
+    // summary" instead of switching to a verbose verb phrase only here.
+    report(this.deps.progress, this.deps.log, 'Final summary', 5);
     events?.emit({ kind: 'phaseStart', phase: 'critique', at: Date.now() });
     events?.emit({ kind: 'passStart', pass: 'summary', label: 'Final summary', at: Date.now() });
     const summaryStart = Date.now();
@@ -65,7 +68,7 @@ export class ReviewOrchestrator {
       kind: 'done',
       verdict: result.summary.overallVerdict,
       durationMs: result.durationMs,
-      findingCount: state.findings.length,
+      findingCount: state.findings.filter(isVisibleFinding).length,
       at: Date.now(),
     });
     return result;

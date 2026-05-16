@@ -59,7 +59,10 @@ export class SummaryViewProvider implements vscode.WebviewViewProvider {
     this.result = result;
     if (result && this.runState.kind === 'running') {
       // A fresh result implicitly clears the transient run state.
-      this.runState = { kind: 'done', verdict: result.summary.overallVerdict, findingCount: result.findings.length };
+      const visibleCount = result.findings.filter(
+        (f) => !f.dismissed && f.decision !== 'drop' && f.decision !== 'merge',
+      ).length;
+      this.runState = { kind: 'done', verdict: result.summary.overallVerdict, findingCount: visibleCount };
       this.stopTick();
     }
     this.rerender();

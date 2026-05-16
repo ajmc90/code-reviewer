@@ -31,6 +31,14 @@ export interface HistoryEntry {
   durationMs: number;
 }
 
+export interface CritiqueDelta {
+  kept: number;
+  revised: number;
+  dropped: number;
+  merged: number;
+  newFindings: number;
+}
+
 export type RunState =
   | { kind: 'idle' }
   | {
@@ -43,7 +51,27 @@ export type RunState =
        * so legacy events don't break the UI.
        */
       plannedPasses: PassName[];
+      /**
+       * Count of findings currently visible (not dismissed, not dropped/merged
+       * by critique). Maintained by reduceEvent: incremented on findingAdded,
+       * reset by replaceAll, decremented when consolidation merges duplicates.
+       * This is the number that should appear in the sidebar — NOT a
+       * monotonically growing emission count.
+       */
       findingCount: number;
+      /**
+       * Set after critique fires its decisions event. Lets the render show a
+       * "−6 dropped · −4 merged · 2 revised" delta below the findings count
+       * so the user can explain the post-critique drop.
+       */
+      critique?: CritiqueDelta;
+      /**
+       * Internal flag for reduceEvent: set to true on the FIRST findingAdded
+       * event with replaceAll, so subsequent events in the same burst can
+       * tell they're part of an ongoing replace (and should increment, not
+       * reset). Reset to false the next time we see a non-replaceAll event.
+       */
+      _replaceMode?: boolean;
       startedAt: number;
       head: string;
       base: string;

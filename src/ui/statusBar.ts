@@ -26,6 +26,8 @@ export class ReviewStatusBar implements vscode.Disposable {
   private completed = new Set<PassName>();
   private current: PassName | null = null;
   private findingCount = 0;
+  /** True while we're inside a burst of replaceAll findingAdded events (critique). Resets on the next non-replaceAll event or start. */
+  private inReplaceBurst = false;
   private startedAt = 0;
   private timer?: NodeJS.Timeout;
 
@@ -40,6 +42,7 @@ export class ReviewStatusBar implements vscode.Disposable {
         this.completed.clear();
         this.current = null;
         this.findingCount = 0;
+        this.inReplaceBurst = false;
         this.startedAt = e.at;
         this.startTimer();
       } else if (e.kind === 'context') {
@@ -55,8 +58,24 @@ export class ReviewStatusBar implements vscode.Disposable {
         this.state = 'error';
         this.stopTimer();
       } else if (e.kind === 'findingAdded') {
-        this.findingCount++;
+        // Replace-all bursts (critique) reset the visible count on the first
+        // event; subsequent events of the same burst add to it. Same logic
+        // as the summaryView reducer — keeps the status bar consistent with
+        // the sidebar instead of growing monotonically.
+        if (e.replaceAll) {
+          if (!this.inReplaceBurst) { this.findingCount = 0; this.inReplaceBurst = true; }
+        } else {
+          this.inReplaceBurst = false;
+        }
+        const dec = e.finding && e.finding.decision;
+        if (dec !== 'drop' && dec !== 'merge') this.findingCount++;
+      } else if (e.kind === 'consolidation') {
+        // Dedupe shrunk the visible set — mirror that here so the status bar
+        // doesn't overcount duplicates the user no longer sees.
+        if (e.merged > 0) this.findingCount = Math.max(0, this.findingCount - e.merged);
       } else if (e.kind === 'done') {
+        // Trust the orchestrator's authoritative final count.
+        this.findingCount = e.findingCount;
         this.state = 'done';
         this.stopTimer();
       } else if (e.kind === 'cancelled') {

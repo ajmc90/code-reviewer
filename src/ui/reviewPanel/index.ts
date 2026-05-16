@@ -30,6 +30,15 @@ export interface PartialReviewSummary {
   startedAt: number;
 }
 
+/**
+ * Snapshot of per-pass median ms-per-line ratios, used by the panel to render
+ * a realistic estimate before the user starts the review. Empty object means
+ * no calibration data — the panel falls back to its hardcoded costSec table.
+ */
+export interface CalibrationSnapshot {
+  ratios: Partial<Record<PassName, { medianMsPerLine: number; sampleCount: number; scope: 'workspace' | 'global' }>>;
+}
+
 export interface ReviewPanelDeps {
   getGit: () => GitService | null;
   startReview: (base: string, head: string, passes?: Partial<PassConfig>) => Promise<void>;
@@ -42,6 +51,8 @@ export interface ReviewPanelDeps {
   getLang: () => Lang;
   setLang: (lang: Lang) => Promise<void>;
   translateFinding: (id: string, targetLang: Lang) => Promise<void>;
+  /** Latest learned per-pass duration ratios; refreshed on every panel ready. */
+  getCalibration: () => CalibrationSnapshot;
 }
 
 /**
@@ -97,6 +108,14 @@ export class ReviewPanel {
     panel.webview.html = this.html();
     this.busSub = bus.onEvent((e) => {
       this.post({ type: 'event', event: e });
+      // Each completed pass adds a sample to the calibration store. Refresh
+      // the panel's snapshot so the *next* pass within this same run — and
+      // any subsequent run without a panel reload — uses the fresh data.
+      //
+      // NOTE: per-pass calibration refresh is triggered from extension.ts
+      // *after* the storage write resolves, via deps.refreshCalibration().
+      // Sending it here would race with the awaited memento.update and the
+      // panel would always be one sample behind.
     });
     panel.webview.onDidReceiveMessage(async (msg) => {
       try {
@@ -112,6 +131,7 @@ export class ReviewPanel {
       for (const e of this.bus.snapshot()) this.post({ type: 'event', event: e });
       if (this.result) this.post({ type: 'result', result: this.result });
       this.post({ type: 'partialSummary', summary: this.deps.getPartialSummary() });
+      this.post({ type: 'calibration', snapshot: this.deps.getCalibration() });
       await this.refreshBranches();
     } else if (msg?.type === 'passDecision' && msg.pass && msg.decision) {
       this.deps.submitPassDecision(msg.pass as PassName, msg.decision as PassFailureDecision);
@@ -146,6 +166,8 @@ export class ReviewPanel {
       this.deps.cancelReview();
     } else if (msg?.type === 'aheadBehind' && msg.base && msg.head) {
       await this.computeAheadBehind(String(msg.base), String(msg.head), String(msg.reqId || ''));
+    } else if (msg?.type === 'diffStat' && msg.base && msg.head) {
+      await this.computeDiffStat(String(msg.base), String(msg.head), String(msg.reqId || ''));
     } else if (msg?.type === 'setLang' && (msg.lang === 'en' || msg.lang === 'es')) {
       await this.deps.setLang(msg.lang as Lang);
     } else if (msg?.type === 'translateFinding' && msg.id && (msg.lang === 'en' || msg.lang === 'es')) {
@@ -180,6 +202,30 @@ export class ReviewPanel {
     this.post({ type: 'aheadBehind', reqId, base, head, result });
   }
 
+  // Preflight diff stats so the panel can scale its runtime estimate before
+  // the user clicks Start. Failures are swallowed (e.g. invalid ref): the
+  // panel will simply fall back to its unscaled estimate.
+  private async computeDiffStat(base: string, head: string, reqId: string) {
+    const git = this.deps.getGit();
+    if (!git) return;
+    try {
+      const result = await git.diffStat(base, head);
+      this.post({
+        type: 'diffStat',
+        reqId,
+        base,
+        head,
+        result: {
+          filesChanged: result.filesChanged,
+          additions: result.insertions,
+          deletions: result.deletions,
+        },
+      });
+    } catch {
+      this.post({ type: 'diffStat', reqId, base, head, result: null });
+    }
+  }
+
   setResult(result: ReviewResult | null) {
     this.result = result;
     this.post({ type: 'result', result });
@@ -187,6 +233,13 @@ export class ReviewPanel {
 
   setPartialSummary(summary: PartialReviewSummary | null) {
     this.post({ type: 'partialSummary', summary });
+  }
+
+  /** Push the latest calibration snapshot to the panel. Called from
+   * extension.ts after each pass sample has been persisted, so the panel
+   * estimator immediately reflects the just-completed run. */
+  refreshCalibration() {
+    this.post({ type: 'calibration', snapshot: this.deps.getCalibration() });
   }
 
   /** Re-render the entire panel HTML in the new language and replay state. */

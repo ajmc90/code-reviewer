@@ -41,7 +41,9 @@ export class FindingsDecorator implements vscode.Disposable {
   }
 
   setFindings(findings: Finding[]) {
-    this.active = findings.filter((f) => !f.dismissed);
+    this.active = findings.filter(
+      (f) => !f.dismissed && f.decision !== 'drop' && f.decision !== 'merge',
+    );
     this.refresh();
   }
 

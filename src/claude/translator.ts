@@ -47,6 +47,16 @@ function pickSourceFields(f: Finding): TranslatedFindingFields {
     suggestedFix: f.suggestedFix
       ? { description: f.suggestedFix.description, replacement: f.suggestedFix.replacement }
       : undefined,
+    // Critique decision prose: only sent when the finding actually carries it,
+    // so we don't pay for translating empty strings on every "kept" finding.
+    decisionReason: f.decisionReason ? f.decisionReason : undefined,
+    originalFinding: f.originalFinding
+      ? {
+          title: f.originalFinding.title,
+          description: f.originalFinding.description,
+          reasoning: f.originalFinding.reasoning,
+        }
+      : undefined,
   };
 }
 
@@ -131,6 +141,25 @@ function normalize(parsed: Record<string, unknown>, source: TranslatedFindingFie
       })()
     : undefined;
 
+  // Critique decision prose — only carried through when the source carried
+  // it. Same fallback strategy as the rest: a missing field in Claude's
+  // response is replaced with the source value so a partial translation
+  // never blanks out the verdict the user is reading.
+  const decisionReason = source.decisionReason !== undefined
+    ? asString(parsed.decisionReason, source.decisionReason)
+    : undefined;
+
+  const originalFinding = source.originalFinding
+    ? (() => {
+        const o = parsed.originalFinding as Record<string, unknown> | undefined;
+        return {
+          title: asString(o?.title, source.originalFinding!.title),
+          description: asString(o?.description, source.originalFinding!.description),
+          reasoning: asString(o?.reasoning, source.originalFinding!.reasoning),
+        };
+      })()
+    : undefined;
+
   return {
     title: asString(parsed.title, source.title),
     description: asString(parsed.description, source.description),
@@ -139,5 +168,7 @@ function normalize(parsed: Record<string, unknown>, source: TranslatedFindingFie
     alternativesConsidered: asStringArray(parsed.alternativesConsidered, source.alternativesConsidered),
     evidence: asStringArray(parsed.evidence, source.evidence),
     suggestedFix: fix,
+    decisionReason,
+    originalFinding,
   };
 }

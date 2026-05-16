@@ -12,6 +12,7 @@ import { PassFailureDecision, PassName, ReviewEventBus } from './core/events';
 import { PassConfig, ReviewResult } from './types';
 import { Lang, getLang, onDidChangeLanguage, setLang, t } from './i18n';
 import { CACHE_KEY, ExtensionRuntime } from './core/extensionContext';
+import { loadCalibration, recordPassSample } from './core/calibration';
 import { loadPartial, buildSummary } from './core/partialState';
 import { loadHistory, loadHistoryResult, recordHistory } from './core/historyStore';
 import { runReview } from './core/reviewController';
@@ -40,6 +41,34 @@ export async function activate(context: vscode.ExtensionContext) {
   const decorator = new FindingsDecorator();
   const bus = new ReviewEventBus();
   const statusBar = new ReviewStatusBar(bus, () => getLang(context));
+
+  // Self-calibrating estimate: for each completed pass, persist its real
+  // duration alongside the diff size seen at run time. The estimator on the
+  // panel side reads this back via loadCalibration() and uses median
+  // ms-per-line to predict future runs.
+  let currentRunDiffSize = 0;
+  context.subscriptions.push(
+    bus.onEvent((e) => {
+      if (e.kind === 'start') {
+        currentRunDiffSize = 0;
+        log(`[calibration] run start — diffSize reset`);
+      } else if (e.kind === 'diff') {
+        currentRunDiffSize = Math.max(0, (e.additions || 0) + (e.deletions || 0));
+        log(`[calibration] diff event — diffSize=${currentRunDiffSize}`);
+      } else if (e.kind === 'passDone') {
+        log(`[calibration] passDone pass=${e.pass} dur=${e.durationMs}ms diffSize=${currentRunDiffSize} ${currentRunDiffSize > 0 ? '→ recording' : '→ SKIPPED (no diffSize)'}`);
+        if (currentRunDiffSize > 0) {
+          // Record THEN notify the panel — sequencing the post after the
+          // memento write resolves means the next snapshot the panel reads
+          // includes the just-finished sample. Without this ordering the
+          // panel races the storage update and shows "no prior runs" forever.
+          void recordPassSample(context, e.pass, e.durationMs, currentRunDiffSize).then(() => {
+            ReviewPanel.currentInstance()?.refreshCalibration();
+          });
+        }
+      }
+    }),
+  );
 
   const findingsTreeView = vscode.window.createTreeView('claudeReviewer.findings', {
     treeDataProvider: findingsTree,
@@ -240,6 +269,11 @@ export async function activate(context: vscode.ExtensionContext) {
     setLang: (lang: Lang) => setLang(context, lang),
     translateFinding: async (id: string, targetLang: Lang) => {
       await translateFindingOnDemand(rt, id, targetLang);
+    },
+    getCalibration: () => {
+      const snap = loadCalibration(context);
+      log(`[calibration] loadCalibration → ${JSON.stringify(snap)}`);
+      return snap;
     },
   };
 

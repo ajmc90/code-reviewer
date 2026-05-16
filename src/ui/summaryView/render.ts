@@ -56,6 +56,27 @@ function brandStateLabel(s: ViewState): string {
   }
 }
 
+/**
+ * Render a one-line breakdown of critique's decisions ("−6 dropped · −4
+ * merged · 2 revised") under the running findings count. Returns '' when
+ * critique hasn't fired yet or there's nothing to report.
+ */
+function renderCritiqueDelta(s: ViewState): string {
+  if (s.runState.kind !== 'running' || !s.runState.critique) return '';
+  const c = s.runState.critique;
+  const total = c.dropped + c.merged + c.revised + c.newFindings;
+  if (total === 0) return '';
+  const parts: string[] = [];
+  if (c.dropped > 0) parts.push(esc(t('summary.critiqueDropped', s.lang, { count: c.dropped })));
+  if (c.merged > 0) parts.push(esc(t('summary.critiqueMerged', s.lang, { count: c.merged })));
+  if (c.revised > 0) parts.push(esc(t('summary.critiqueRevised', s.lang, { count: c.revised })));
+  if (c.newFindings > 0) parts.push(esc(t('summary.critiqueNew', s.lang, { count: c.newFindings })));
+  return /* html */ `
+    <div class="card__delta" title="${esc(t('summary.critiqueDeltaTitle', s.lang))}">
+      ${parts.join(' <span class="meta-sep">·</span> ')}
+    </div>`;
+}
+
 function renderBrand(s: ViewState): string {
   return /* html */ `
     <header class="brand">
@@ -98,6 +119,7 @@ function renderRunningOrFailed(s: ViewState): string {
           <span class="meta-sep">·</span>
           <span class="meta-time">${esc(t('summary.seconds', lang, { seconds: elapsed }))}</span>
         </div>
+        ${renderCritiqueDelta(s)}
       </section>`;
   }
   if (runState.kind === 'failed') {
@@ -165,7 +187,10 @@ function renderLastResult(s: ViewState): string {
   const { lang, result } = s;
   const summary = result.summary;
   const verdict = (summary.overallVerdict || '').toUpperCase();
-  const findingsByLevel = group(result.findings.filter((f) => !f.dismissed), (f) => f.severity);
+  const findingsByLevel = group(
+    result.findings.filter((f) => !f.dismissed && f.decision !== 'drop' && f.decision !== 'merge'),
+    (f) => f.severity,
+  );
   const chips = (['critical', 'major', 'minor', 'nit', 'praise'] as const)
     .filter((k) => (findingsByLevel[k] || []).length > 0)
     .map((k) => `<span class="chip chip-${k}"><span class="swatch" aria-hidden="true"></span>${esc(t(`panel.${k}` as Parameters<typeof t>[0], lang))}<b>${(findingsByLevel[k] || []).length}</b></span>`)

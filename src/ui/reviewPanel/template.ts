@@ -117,9 +117,46 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
           </div>
           <div class="presets" id="presets" role="group" aria-label="${trE('panel.presetsLabel')}">
             <span class="presets__label">${trE('panel.presetsLabel')}</span>
-            <button type="button" class="preset" data-preset="fast"     title="${trE('panel.presetFastTitle')}">${trE('panel.presetFast')}</button>
-            <button type="button" class="preset" data-preset="deep"     title="${trE('panel.presetDeepTitle')}">${trE('panel.presetDeep')}</button>
-            <button type="button" class="preset" data-preset="security" title="${trE('panel.presetSecurityTitle')}">${trE('panel.presetSecurity')}</button>
+            <button type="button" class="preset" data-preset="fast" aria-describedby="preset-tip-fast">
+              <span class="preset__label">${trE('panel.presetFast')}</span>
+              <span class="preset-tip" id="preset-tip-fast" role="tooltip">
+                <span class="preset-tip__title">${trE('panel.presetFast')}</span>
+                <span class="preset-tip__hint">${trE('panel.presetFastTitle')}</span>
+                <span class="preset-tip__detail">${trE('panel.presetFastPasses')}</span>
+              </span>
+            </button>
+            <button type="button" class="preset" data-preset="deep" aria-describedby="preset-tip-deep">
+              <span class="preset__label">${trE('panel.presetDeep')}</span>
+              <span class="preset-tip" id="preset-tip-deep" role="tooltip">
+                <span class="preset-tip__title">${trE('panel.presetDeep')}</span>
+                <span class="preset-tip__hint">${trE('panel.presetDeepTitle')}</span>
+                <span class="preset-tip__detail">${trE('panel.presetDeepPasses')}</span>
+              </span>
+            </button>
+            <button type="button" class="preset" data-preset="security" aria-describedby="preset-tip-security">
+              <span class="preset__label">${trE('panel.presetSecurity')}</span>
+              <span class="preset-tip" id="preset-tip-security" role="tooltip">
+                <span class="preset-tip__title">${trE('panel.presetSecurity')}</span>
+                <span class="preset-tip__hint">${trE('panel.presetSecurityTitle')}</span>
+                <span class="preset-tip__detail">${trE('panel.presetSecurityPasses')}</span>
+              </span>
+            </button>
+            <button type="button" class="preset" data-preset="performance" aria-describedby="preset-tip-performance">
+              <span class="preset__label">${trE('panel.presetPerformance')}</span>
+              <span class="preset-tip" id="preset-tip-performance" role="tooltip">
+                <span class="preset-tip__title">${trE('panel.presetPerformance')}</span>
+                <span class="preset-tip__hint">${trE('panel.presetPerformanceTitle')}</span>
+                <span class="preset-tip__detail">${trE('panel.presetPerformancePasses')}</span>
+              </span>
+            </button>
+            <button type="button" class="preset" data-preset="accessibility" aria-describedby="preset-tip-accessibility">
+              <span class="preset__label">${trE('panel.presetAccessibility')}</span>
+              <span class="preset-tip" id="preset-tip-accessibility" role="tooltip">
+                <span class="preset-tip__title">${trE('panel.presetAccessibility')}</span>
+                <span class="preset-tip__hint">${trE('panel.presetAccessibilityTitle')}</span>
+                <span class="preset-tip__detail">${trE('panel.presetAccessibilityPasses')}</span>
+              </span>
+            </button>
           </div>
           <div class="active-passes" id="active-passes" aria-live="polite" aria-label="${trE('panel.activePasses')}"></div>
           <div class="advanced-toggle">
@@ -189,6 +226,7 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
           <button class="filter" type="button" data-f="nit" aria-pressed="false">${trE('panel.nit')}</button>
           <button class="filter" type="button" data-f="praise" aria-pressed="false">${trE('panel.praise')}</button>
           <button class="filter filter--silenced" type="button" data-f="silenced" aria-pressed="false" title="${trE('panel.silencedFilterTitle')}">${trE('panel.silenced')}</button>
+          <button class="filter filter--revised" type="button" data-f="revised" aria-pressed="false" title="${trE('panel.revisedFilterTitle')}">${trE('panel.revised')} <span class="filter__count" id="filter-revised-count" hidden>0</span></button>
           <label class="sr-only" for="search">${trE('panel.filterByText')}</label>
           <input class="search" id="search" type="search" placeholder="${trE('panel.findingsSearchPlaceholder')}" autocomplete="off" spellcheck="false" />
         </div>

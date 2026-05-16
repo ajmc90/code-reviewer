@@ -280,7 +280,7 @@ export function dedupeFindings(findings: Finding[]): Finding[] {
   });
 }
 
-const LINE_PROXIMITY = 3;
+const LINE_PROXIMITY = 5;
 
 function findMatchingBucket(buckets: Finding[][], f: Finding): Finding[] | null {
   for (const bucket of buckets) {
@@ -288,9 +288,18 @@ function findMatchingBucket(buckets: Finding[][], f: Finding): Finding[] | null 
     if (candidate.file !== f.file) continue;
     if (isRelatedFinding(candidate)) continue;
     if (!rangesOverlap(candidate.range, f.range, LINE_PROXIMITY)) continue;
-    // Match if titles are similar OR the category matches AND they overlap closely.
+    // 1. Strong signal: titles are clearly similar (normalized equality or
+    //    token-overlap above 0.5). Same root cause regardless of category.
     if (titlesSimilar(candidate.title, f.title)) return bucket;
+    // 2. Same category AND tight range overlap — classic "two passes flagged
+    //    the same bug from the same angle".
     if (candidate.category === f.category && rangesOverlap(candidate.range, f.range, 0)) return bucket;
+    // 3. Cross-category, loose-title match: different specialists looking at
+    //    the same lines from different angles (e.g. perf + tests both flag
+    //    "N+1 query in getUsers" / "missing test for getUsers loop"). Merge
+    //    when there is *some* lexical overlap (Jaccard ≥ 0.3) to avoid
+    //    collapsing unrelated findings that happen to live on the same line.
+    if (jaccardTitleSimilarity(candidate.title, f.title) >= 0.3) return bucket;
   }
   return null;
 }
@@ -310,7 +319,33 @@ function titlesSimilar(a: string, b: string): boolean {
   if (na === nb) return true;
   if (na.length >= 12 && nb.includes(na)) return true;
   if (nb.length >= 12 && na.includes(nb)) return true;
-  return false;
+  return jaccardTitleSimilarity(a, b) >= 0.5;
+}
+
+// Stopwords we ignore when computing title overlap — they're noise, not signal.
+const TITLE_STOPWORDS = new Set([
+  'a', 'an', 'the', 'is', 'in', 'on', 'at', 'to', 'of', 'for', 'and', 'or',
+  'but', 'not', 'be', 'this', 'that', 'with', 'by', 'as', 'from', 'into', 'it',
+  'its', 'related', 'missing', 'should', 'could', 'may', 'might', 'when', 'if',
+]);
+
+function titleTokens(s: string): Set<string> {
+  const tokens = String(s || '')
+    .toLowerCase()
+    .replace(/^related:\s*/i, '')
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !TITLE_STOPWORDS.has(t));
+  return new Set(tokens);
+}
+
+function jaccardTitleSimilarity(a: string, b: string): number {
+  const ta = titleTokens(a);
+  const tb = titleTokens(b);
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  const union = ta.size + tb.size - inter;
+  return union === 0 ? 0 : inter / union;
 }
 
 function isRelatedFinding(f: Finding): boolean {
