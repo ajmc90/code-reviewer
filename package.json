@@ -168,7 +168,7 @@
         {
           "id": "claudeReviewer",
           "title": "%view.container.title%",
-          "icon": "media/claude.svg"
+          "icon": "media/icon.svg"
         }
       ]
     },
@@ -177,7 +177,7 @@
         {
           "id": "claudeReviewer.findings",
           "name": "%view.findings%",
-          "icon": "media/claude.svg",
+          "icon": "media/icon.svg",
           "contextualTitle": "%view.container.title%"
         },
         {

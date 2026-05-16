@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Rama principal (Git) -->
+  <circle cx="5" cy="19" r="2"/>
+  <circle cx="5" cy="5" r="2"/>
+  <path d="M 5 7 V 17"/>
+
+  <!-- Bifurcación (Pull Request) conectando con la IA -->
+  <path d="M 5 15 C 5 10 10 9 16 9"/>
+
+  <!-- Cabeza de Robot (Claude/IA) -->
+  <rect x="12" y="3" width="8" height="6" rx="1.5"/>
+  
+  <!-- Antena de la IA -->
+  <path d="M 16 3 V 1"/>
+  
+  <!-- Ojos del robot -->
+  <circle cx="14.5" cy="5.5" r="0.8" fill="currentColor" stroke="none"/>
+  <circle cx="17.5" cy="5.5" r="0.8" fill="currentColor" stroke="none"/>
+
+  <!-- Checkmark de Code Review (Aprobado) -->
+  <path d="M 11 16 L 14.5 19.5 L 21 11.5" stroke-width="1.75"/>
+</svg>
