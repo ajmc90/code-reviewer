@@ -4,8 +4,8 @@ import * as fs from 'fs';
 import { GitService } from './git/gitService';
 import { ClaudeCliClient } from './claude/cliClient';
 import { ReviewOrchestrator, ReviewPausedError } from './core/orchestrator';
-import { FindingsTreeProvider } from './ui/findingsTree';
-import { SummaryViewProvider } from './ui/summaryView';
+import { FindingsTreeProvider, GroupMode } from './ui/findingsTree';
+import { SummaryViewProvider, HistoryEntry } from './ui/summaryView';
 import { FindingsDecorator } from './ui/decorations';
 import { ReviewPanel, PartialReviewSummary } from './ui/reviewPanel';
 import { ReviewStatusBar } from './ui/statusBar';
@@ -15,6 +15,10 @@ import { Lang, getLang, onDidChangeLanguage, setLang, t } from './i18n';
 
 const CACHE_KEY = 'claudeReviewer.lastResult';
 const PARTIAL_KEY = 'claudeReviewer.partialState';
+const HISTORY_KEY = 'claudeReviewer.history';
+const HISTORY_RESULT_PREFIX = 'claudeReviewer.history.result.';
+const GROUPBY_KEY = 'claudeReviewer.findingsGroupBy';
+const HISTORY_MAX = 5;
 
 export async function activate(context: vscode.ExtensionContext) {
   const output = vscode.window.createOutputChannel('Claude Review', { log: true });
@@ -26,19 +30,27 @@ export async function activate(context: vscode.ExtensionContext) {
     t(key, getLang(context), params);
 
   const findingsTree = new FindingsTreeProvider();
-  const summaryView = new SummaryViewProvider(() => getLang(context));
+  // Restore last-used grouping so the tree opens the way the user left it.
+  const savedGroupBy = context.workspaceState.get<GroupMode>(GROUPBY_KEY);
+  if (savedGroupBy === 'severity' || savedGroupBy === 'file' || savedGroupBy === 'category') {
+    findingsTree.setGroupBy(savedGroupBy);
+  }
+  void vscode.commands.executeCommand('setContext', 'claudeReviewer.findingsGroupBy', findingsTree.getGroupBy());
+
   const decorator = new FindingsDecorator();
   const bus = new ReviewEventBus();
   const statusBar = new ReviewStatusBar(bus, () => getLang(context));
 
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider('claudeReviewer.findings', findingsTree),
-    vscode.window.registerWebviewViewProvider(SummaryViewProvider.viewType, summaryView),
-    decorator,
-    statusBar,
-    bus,
-    output,
-  );
+  // Tree view (not provider-only) so we can attach a badge with the
+  // critical+major count — the most important "is there work to do?" signal.
+  const findingsTreeView = vscode.window.createTreeView('claudeReviewer.findings', {
+    treeDataProvider: findingsTree,
+    showCollapseAll: true,
+  });
+  findingsTree.onDidChangeGroupBy((mode) => {
+    void context.workspaceState.update(GROUPBY_KEY, mode);
+    void vscode.commands.executeCommand('setContext', 'claudeReviewer.findingsGroupBy', mode);
+  });
 
   // The active review's cancellation source. Multiple UI affordances feed into it:
   // the progress notification's X, the panel's Stop button, and the
@@ -84,15 +96,163 @@ export async function activate(context: vscode.ExtensionContext) {
     };
   };
   const broadcastPartialSummary = () => {
-    ReviewPanel.currentInstance()?.setPartialSummary(buildSummary(loadPartial()));
+    const summary = buildSummary(loadPartial());
+    ReviewPanel.currentInstance()?.setPartialSummary(summary);
+    summaryView.setPartialSummary(summary);
   };
+
+  // History of finished reviews — sidebar shows the latest few so the user
+  // can jump back to a prior review without re-running. We keep two storage
+  // tiers: a lightweight HistoryEntry[] index (always loaded) and full
+  // ReviewResult blobs stored per-id under a prefixed key. This keeps the
+  // index cheap to read while the heavy payload is only fetched on recall.
+  const loadHistory = (): HistoryEntry[] => {
+    const raw = context.workspaceState.get<HistoryEntry[]>(HISTORY_KEY);
+    return Array.isArray(raw) ? raw : [];
+  };
+  const writeHistoryIndex = async (entries: HistoryEntry[]) => {
+    await context.workspaceState.update(HISTORY_KEY, entries);
+    summaryView.setResult(lastResult);
+  };
+  /** Drop oldest entries past HISTORY_MAX, deleting their stored ReviewResult. */
+  const pruneHistory = async (entries: HistoryEntry[]): Promise<HistoryEntry[]> => {
+    if (entries.length <= HISTORY_MAX) return entries;
+    const kept = entries.slice(0, HISTORY_MAX);
+    const dropped = entries.slice(HISTORY_MAX);
+    for (const d of dropped) {
+      await context.workspaceState.update(HISTORY_RESULT_PREFIX + d.id, undefined);
+    }
+    return kept;
+  };
+  const recordHistory = async (r: ReviewResult) => {
+    const sev = r.findings.reduce<Record<string, number>>((acc, f) => {
+      if (!f.dismissed) acc[f.severity] = (acc[f.severity] || 0) + 1;
+      return acc;
+    }, {});
+    const id = `${r.summary.baseBranch}|${r.summary.branch}|${Date.parse(r.summary.generatedAt) || Date.now()}`;
+    const entry: HistoryEntry = {
+      id,
+      baseBranch: r.summary.baseBranch,
+      headBranch: r.summary.branch,
+      verdict: r.summary.overallVerdict,
+      findingCount: r.findings.filter((f) => !f.dismissed).length,
+      critical: sev.critical || 0,
+      major: sev.major || 0,
+      finishedAt: Date.parse(r.summary.generatedAt) || Date.now(),
+      durationMs: r.durationMs,
+    };
+    // Keep the most recent entry per (base, head) pair so the list stays useful.
+    const existing = loadHistory();
+    const stale = existing.filter(
+      (h) => h.baseBranch === entry.baseBranch && h.headBranch === entry.headBranch,
+    );
+    for (const s of stale) {
+      await context.workspaceState.update(HISTORY_RESULT_PREFIX + s.id, undefined);
+    }
+    const next = await pruneHistory([
+      entry,
+      ...existing.filter((h) => !(h.baseBranch === entry.baseBranch && h.headBranch === entry.headBranch)),
+    ]);
+    await context.workspaceState.update(HISTORY_RESULT_PREFIX + id, r);
+    await writeHistoryIndex(next);
+  };
+  const loadHistoryResult = (id: string): ReviewResult | null => {
+    const r = context.workspaceState.get<ReviewResult>(HISTORY_RESULT_PREFIX + id);
+    return r ?? null;
+  };
+  const recallReviewFromHistory = async (id: string) => {
+    const r = loadHistoryResult(id);
+    if (!r) {
+      // Index entry exists but the heavy payload was evicted (e.g. extension
+      // upgrade dropped it). Best we can do is open the panel.
+      vscode.window.showInformationMessage(tr('notif.historyResultMissing'));
+      vscode.commands.executeCommand('claudeReviewer.showPanel');
+      return;
+    }
+    // Rehydrate as the current result so the tree, decorations, and panel
+    // all reflect it. We deliberately don't call recordHistory again — recall
+    // is read-only.
+    lastResult = r;
+    await context.workspaceState.update(CACHE_KEY, r);
+    findingsTree.setResult(r);
+    summaryView.setResult(r);
+    decorator.setFindings(r.findings);
+    ReviewPanel.currentInstance()?.setResult(r);
+    refreshFindingsBadge();
+    void vscode.commands.executeCommand('setContext', 'claudeReviewer.hasResult', true);
+    // Surface the panel so the user can interact with the rehydrated findings.
+    vscode.commands.executeCommand('claudeReviewer.showPanel');
+  };
+
+  const summaryDeps = {
+    getLang: () => getLang(context),
+    getCurrentBranch: async (): Promise<string | null> => {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) return null;
+      try {
+        const g = new GitService(root);
+        if (!(await g.isRepo())) return null;
+        return await g.currentBranch();
+      } catch {
+        return null;
+      }
+    },
+    getDefaultBaseBranch: async (): Promise<string | null> => {
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!root) return null;
+      try {
+        const cfg = vscode.workspace.getConfiguration('claudeReviewer');
+        const configured = cfg.get<string>('baseBranch', '');
+        if (configured) return configured;
+        const g = new GitService(root);
+        if (!(await g.isRepo())) return null;
+        return await g.detectDefaultBaseBranch();
+      } catch {
+        return null;
+      }
+    },
+    getPartialSummary: (): PartialReviewSummary | null => buildSummary(loadPartial()),
+    startReviewCurrentBranch: () => vscode.commands.executeCommand('claudeReviewer.reviewCurrentBranch'),
+    startReviewInteractive: () => vscode.commands.executeCommand('claudeReviewer.reviewBranch'),
+    openPanel: () => vscode.commands.executeCommand('claudeReviewer.showPanel'),
+    cancelReview: () => cancelCurrentReview(),
+    resumeReview: () => vscode.commands.executeCommand('claudeReviewer.resumeReview'),
+    discardPartial: () => vscode.commands.executeCommand('claudeReviewer.discardPartial'),
+    exportReport: () => vscode.commands.executeCommand('claudeReviewer.exportReport'),
+    recallReview: (id: string) => recallReviewFromHistory(id),
+    getHistory: (): HistoryEntry[] => loadHistory(),
+    isReviewRunning: () => currentReviewCts !== null,
+  };
+  const summaryView = new SummaryViewProvider(summaryDeps, bus);
+
+  const refreshFindingsBadge = () => {
+    const n = findingsTree.attentionCount();
+    findingsTreeView.badge = n > 0
+      ? { value: n, tooltip: t('view.findings.badgeTooltip', getLang(context), { count: n }) }
+      : undefined;
+  };
+  findingsTree.onDidChangeTreeData(refreshFindingsBadge);
+
+  context.subscriptions.push(
+    findingsTreeView,
+    vscode.window.registerWebviewViewProvider(SummaryViewProvider.viewType, summaryView),
+    summaryView,
+    decorator,
+    statusBar,
+    bus,
+    output,
+  );
 
   let lastResult: ReviewResult | null = context.workspaceState.get<ReviewResult>(CACHE_KEY) ?? null;
   if (lastResult) {
     findingsTree.setResult(lastResult);
     summaryView.setResult(lastResult);
     decorator.setFindings(lastResult.findings);
+    refreshFindingsBadge();
   }
+  void vscode.commands.executeCommand('setContext', 'claudeReviewer.hasResult', lastResult !== null);
+  // Surface any saved paused state to the sidebar on startup.
+  summaryView.setPartialSummary(buildSummary(loadPartial()));
 
   const setResult = async (r: ReviewResult | null) => {
     lastResult = r;
@@ -101,6 +261,9 @@ export async function activate(context: vscode.ExtensionContext) {
     summaryView.setResult(r);
     decorator.setFindings(r?.findings ?? []);
     ReviewPanel.currentInstance()?.setResult(r);
+    refreshFindingsBadge();
+    void vscode.commands.executeCommand('setContext', 'claudeReviewer.hasResult', r !== null);
+    if (r) await recordHistory(r);
   };
 
   const panelDeps = {
@@ -646,6 +809,19 @@ export async function activate(context: vscode.ExtensionContext) {
       await setLang(context, 'es');
       vscode.window.showInformationMessage(t('notif.languageSwitched', 'es', { lang: t('lang.spanishLong', 'es') }));
     }),
+    vscode.commands.registerCommand('claudeReviewer.findings.groupBySeverity', () =>
+      findingsTree.setGroupBy('severity'),
+    ),
+    vscode.commands.registerCommand('claudeReviewer.findings.groupByFile', () =>
+      findingsTree.setGroupBy('file'),
+    ),
+    vscode.commands.registerCommand('claudeReviewer.findings.groupByCategory', () =>
+      findingsTree.setGroupBy('category'),
+    ),
+    vscode.commands.registerCommand('claudeReviewer.findings.refresh', () => {
+      findingsTree.refresh();
+      void summaryView.refreshBranchInfo();
+    }),
   );
 
   // When the user toggles language, push the change to every surface so the
@@ -654,6 +830,7 @@ export async function activate(context: vscode.ExtensionContext) {
     onDidChangeLanguage((lang) => {
       statusBar.onLanguageChanged();
       summaryView.onLanguageChanged();
+      refreshFindingsBadge();
       ReviewPanel.currentInstance()?.onLanguageChanged(lang);
     }),
   );

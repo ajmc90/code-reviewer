@@ -672,17 +672,18 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 /* ─────────────────────────────────────────────────────────────────
  * Passes (analysis aspects) selector
  * ────────────────────────────────────────────────────────────── */
-.passes{
-  display:flex; flex-wrap: wrap; gap: 6px;
-  padding: var(--s-2);
+.section--passes{
+  padding: var(--s-3);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  background: var(--bg);
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
+}
+.passes{
+  display:flex; flex-direction: column; gap: var(--s-3);
 }
 .passes-head{
   display:flex; align-items:center; gap: var(--s-2);
   width: 100%;
-  margin-bottom: var(--s-1);
 }
 .passes-head .section-title{ flex: 1; margin: 0 }
 .passes-head .passes-actions{ display:flex; gap: 4px }
@@ -693,6 +694,126 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
 }
 .passes-head .link:hover{ background: var(--accent-tint) }
 .passes-head .passes-count{ color: var(--fg-subtle); font-size: var(--t-xs) }
+
+/* Presets */
+.presets{
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+}
+.presets__label{
+  font-size: var(--t-xs);
+  color: var(--fg-subtle);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin-right: 2px;
+}
+.preset{
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: 500;
+  padding: 3px var(--s-2);
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.preset:hover{ background: color-mix(in srgb, var(--fg) 5%, transparent); color: var(--fg) }
+.preset[aria-pressed="true"]{
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--fg);
+}
+
+/* Pass groups */
+.pass-group{
+  display: flex; flex-direction: column; gap: var(--s-1);
+}
+.pass-group__h{
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.pass-group__pills{
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+
+/* Pass pill (replaces .checkpill for passes) */
+.pass-pill{
+  position: relative;
+  display: inline-flex; align-items: center; gap: var(--s-1);
+  padding: 4px var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--t-xs);
+  color: var(--fg-muted);
+  background: var(--bg);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.pass-pill input{ margin: 0; cursor: pointer; accent-color: var(--accent) }
+.pass-pill:hover{ background: color-mix(in srgb, var(--fg) 5%, transparent) }
+.pass-pill:has(input:checked){
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.pass-pill__cond{
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--warn, #f4b03c) 25%, transparent);
+  color: color-mix(in srgb, var(--warn, #f4b03c) 90%, var(--fg) 10%);
+}
+
+/* Rich tooltip — appears on hover/focus. CSS-only, no JS. */
+.pass-tip{
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  max-width: 320px;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--vscode-editorWidget-background, var(--bg));
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: var(--t-xs);
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  display: grid;
+  gap: 4px;
+  white-space: normal;
+}
+.pass-pill:hover .pass-tip,
+.pass-pill:focus-within .pass-tip{
+  opacity: 1;
+  transform: translateY(0);
+}
+.pass-tip__title{ font-weight: 600; color: var(--fg) }
+.pass-tip__hint{ color: var(--fg-muted) }
+.pass-tip__detail{ color: var(--fg-subtle); font-size: 11px; font-style: italic }
+
+/* Estimate footer */
+.passes-estimate{
+  font-size: var(--t-xs);
+  color: var(--fg-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.passes-estimate:empty{ display: none }
 
 /* Section primitive */
 .section{ display:flex; flex-direction:column; gap:var(--s-3); min-width:0 }
@@ -1418,15 +1539,22 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
           </div>
         </section>
 
-        <section class="section" aria-labelledby="passes-title">
+        <section class="section section--passes" aria-labelledby="passes-title">
           <div class="passes-head">
             <h2 class="section-title" id="passes-title">${trE('panel.analysisPasses')} <span class="passes-count" id="passes-count"></span></h2>
             <div class="passes-actions">
-              <button type="button" class="link" id="btn-passes-all" title="${trE('panel.selectAllTitle')}">${trE('panel.selectAll')}</button>
               <button type="button" class="link" id="btn-passes-none" title="${trE('panel.selectNoneTitle')}">${trE('panel.selectNone')}</button>
             </div>
           </div>
+          <div class="presets" id="presets" role="group" aria-label="${trE('panel.presetsLabel')}">
+            <span class="presets__label">${trE('panel.presetsLabel')}</span>
+            <button type="button" class="preset" data-preset="all"      title="${trE('panel.presetAllTitle')}">${trE('panel.presetAll')}</button>
+            <button type="button" class="preset" data-preset="fast"     title="${trE('panel.presetFastTitle')}">${trE('panel.presetFast')}</button>
+            <button type="button" class="preset" data-preset="deep"     title="${trE('panel.presetDeepTitle')}">${trE('panel.presetDeep')}</button>
+            <button type="button" class="preset" data-preset="security" title="${trE('panel.presetSecurityTitle')}">${trE('panel.presetSecurity')}</button>
+          </div>
           <div class="passes" id="passes" role="group" aria-label="${trE('panel.choosePasses')}"></div>
+          <div class="passes-estimate" id="passes-estimate" aria-live="polite"></div>
         </section>
 
         <section class="section" aria-labelledby="activity-title">
@@ -1505,20 +1633,67 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
   }
 
   // PASS_DEFS keeps stable keys; labels/hints come from i18n at render time.
+  // family = layout grouping; conditional = pass only fires under specific
+  // diff shapes (don't surprise the user with zero findings); costSec is a
+  // rough lower/upper Claude-call estimate used to render the runtime hint.
   const PASS_DEFS = [
-    { key: 'structural'    },
-    { key: 'explore'       },
-    { key: 'security'      },
-    { key: 'performance'   },
-    { key: 'accessibility' },
-    { key: 'tests'         },
-    { key: 'gaps'          },
-    { key: 'permute'       },
-    { key: 'critique'      },
+    { key: 'structural',    family: 'foundation', costSec: [25, 50] },
+    { key: 'explore',       family: 'foundation', costSec: [40, 80] },
+    { key: 'security',      family: 'quality',    costSec: [35, 70] },
+    { key: 'performance',   family: 'quality',    costSec: [30, 60] },
+    { key: 'accessibility', family: 'quality',    costSec: [25, 50], conditional: 'ui-only' },
+    { key: 'tests',         family: 'quality',    costSec: [30, 60] },
+    { key: 'gaps',          family: 'quality',    costSec: [35, 70] },
+    { key: 'permute',       family: 'reasoning',  costSec: [40, 80] },
+    { key: 'critique',      family: 'reasoning',  costSec: [40, 80] },
   ];
+  // Presets — each lists keys that should be enabled; everything else off.
+  const PASS_PRESETS = {
+    all:      PASS_DEFS.map(p => p.key),
+    fast:     ['structural', 'explore', 'critique'],
+    deep:     PASS_DEFS.map(p => p.key),
+    security: ['structural', 'security', 'gaps', 'critique'],
+  };
+  const FAMILY_ORDER = ['foundation', 'quality', 'reasoning'];
   function passLabel(key){ return tMsg('pass.' + key + '.label'); }
   function passHint(key){  return tMsg('pass.' + key + '.hint');  }
+  function passDetail(key){ return tMsg('pass.' + key + '.detail'); }
+  function familyLabel(name){ return tMsg('passes.family.' + name); }
   const PASS_KEY_SET = new Set(PASS_DEFS.map(p => p.key));
+
+  /** Sum costSec ranges for active passes → "~Xm" / "~X–Ym". */
+  function formatEstimate(){
+    let lo = 0, hi = 0, n = 0;
+    for (const def of PASS_DEFS){
+      if (!state.passes[def.key]) continue;
+      n++;
+      lo += def.costSec[0];
+      hi += def.costSec[1];
+    }
+    if (n === 0) return '';
+    const fmt = (s) => {
+      if (s < 60) return s + 's';
+      const m = Math.round(s / 60);
+      return m + 'm';
+    };
+    const range = fmt(lo) === fmt(hi) ? fmt(lo) : (fmt(lo) + '–' + fmt(hi));
+    return tMsg('passes.estimate', { range: range, calls: n });
+  }
+  /** Currently-matching preset name, or null if no exact match. */
+  function activePresetName(){
+    const active = new Set();
+    for (const def of PASS_DEFS) if (state.passes[def.key]) active.add(def.key);
+    for (const [name, keys] of Object.entries(PASS_PRESETS)){
+      if (active.size !== keys.length) continue;
+      if (keys.every(k => active.has(k))) {
+        // Skip 'all' if 'deep' also matches — they're aliases.
+        if (name === 'all') continue;
+        return name;
+      }
+    }
+    if (active.size === PASS_DEFS.length) return 'all';
+    return null;
+  }
 
   const CATEGORY_DEFS = [
     'bug', 'security', 'performance', 'correctness', 'maintainability',
@@ -2125,21 +2300,56 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     const root = $('#passes');
     if (!root) return;
     let active = 0;
-    const html = [];
-    for (const def of PASS_DEFS){
-      const on = !!state.passes[def.key];
-      if (on) active++;
-      html.push(
-        '<label class="checkpill" title="'+escAttr(passHint(def.key))+'">' +
-          '<input type="checkbox" data-pass="'+escAttr(def.key)+'"'+(on?' checked':'')+'>' +
-          esc(passLabel(def.key)) +
-        '</label>'
+    const groupsHtml = [];
+    for (const family of FAMILY_ORDER){
+      const inFamily = PASS_DEFS.filter(d => d.family === family);
+      if (inFamily.length === 0) continue;
+      const pills = [];
+      for (const def of inFamily){
+        const on = !!state.passes[def.key];
+        if (on) active++;
+        const conditional = def.conditional
+          ? '<span class="pass-pill__cond" title="'+escAttr(tMsg('passes.conditional.'+def.conditional))+'">'+esc(tMsg('passes.conditionalShort'))+'</span>'
+          : '';
+        pills.push(
+          '<label class="pass-pill" data-key="'+escAttr(def.key)+'">' +
+            '<input type="checkbox" data-pass="'+escAttr(def.key)+'"'+(on?' checked':'')+' aria-describedby="pass-tip-'+escAttr(def.key)+'">' +
+            '<span class="pass-pill__label">'+esc(passLabel(def.key))+'</span>' +
+            conditional +
+            '<span class="pass-tip" id="pass-tip-'+escAttr(def.key)+'" role="tooltip">' +
+              '<span class="pass-tip__title">'+esc(passLabel(def.key))+'</span>' +
+              '<span class="pass-tip__hint">'+esc(passHint(def.key))+'</span>' +
+              '<span class="pass-tip__detail">'+esc(passDetail(def.key))+'</span>' +
+            '</span>' +
+          '</label>'
+        );
+      }
+      groupsHtml.push(
+        '<div class="pass-group" data-family="'+escAttr(family)+'">' +
+          '<div class="pass-group__h">'+esc(familyLabel(family))+'</div>' +
+          '<div class="pass-group__pills">'+pills.join('')+'</div>' +
+        '</div>'
       );
     }
-    root.innerHTML = html.join('');
+    root.innerHTML = groupsHtml.join('');
     const total = PASS_DEFS.length;
-    $('#passes-count').textContent = active === total ? '(all)' : '('+active+'/'+total+')';
+    $('#passes-count').textContent = active === total ? '('+tMsg('panel.selectAll').toLowerCase()+')' : '('+active+'/'+total+')';
+    const est = $('#passes-estimate');
+    if (est) est.textContent = active === 0 ? '' : formatEstimate();
+    // Highlight matching preset (if any).
+    const activePreset = activePresetName();
+    for (const btn of document.querySelectorAll('.preset')){
+      btn.setAttribute('aria-pressed', btn.dataset.preset === activePreset ? 'true' : 'false');
+    }
     syncStartBtn();
+  }
+  function applyPreset(name){
+    const keys = PASS_PRESETS[name];
+    if (!keys) return;
+    const setKeys = new Set(keys);
+    for (const def of PASS_DEFS) state.passes[def.key] = setKeys.has(def.key);
+    renderPasses();
+    persist();
   }
   function syncStartBtn(){
     // While running the button is a Stop button — always enabled. Otherwise it
@@ -2301,15 +2511,18 @@ main:not([data-collapsed="1"]) .rail-spinner{ display:none }
     renderPasses();
     persist();
   });
-  $('#btn-passes-all').addEventListener('click', () => {
-    for (const def of PASS_DEFS) state.passes[def.key] = true;
-    renderPasses();
-    persist();
-  });
   $('#btn-passes-none').addEventListener('click', () => {
     for (const def of PASS_DEFS) state.passes[def.key] = false;
     renderPasses();
     persist();
+  });
+  $('#presets').addEventListener('click', (ev) => {
+    const t = ev.target;
+    if (!(t instanceof HTMLElement)) return;
+    const btn = t.closest('[data-preset]');
+    if (!btn) return;
+    ev.preventDefault();
+    applyPreset(btn.dataset.preset);
   });
 
   $('#btn-collapse').addEventListener('click', () => setLeftCollapsed(!state.leftCollapsed));

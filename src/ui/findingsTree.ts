@@ -4,6 +4,8 @@ import { Finding, ReviewResult, Severity } from '../types';
 
 type Node = GroupNode | FindingNode;
 
+export type GroupMode = 'severity' | 'file' | 'category';
+
 class GroupNode {
   readonly kind = 'group' as const;
   constructor(public label: string, public children: Finding[], public collapsibleState: vscode.TreeItemCollapsibleState) {}
@@ -21,16 +23,35 @@ export class FindingsTreeProvider implements vscode.TreeDataProvider<Node> {
   readonly onDidChangeTreeData = this._onDidChange.event;
 
   private result: ReviewResult | null = null;
-  private groupBy: 'severity' | 'file' | 'category' = 'severity';
+  private groupBy: GroupMode = 'severity';
+  private _onDidChangeGroupBy = new vscode.EventEmitter<GroupMode>();
+  readonly onDidChangeGroupBy = this._onDidChangeGroupBy.event;
 
   setResult(result: ReviewResult | null) {
     this.result = result;
     this._onDidChange.fire(undefined);
   }
 
-  setGroupBy(mode: 'severity' | 'file' | 'category') {
+  setGroupBy(mode: GroupMode) {
+    if (mode === this.groupBy) return;
     this.groupBy = mode;
+    this._onDidChangeGroupBy.fire(mode);
     this._onDidChange.fire(undefined);
+  }
+
+  getGroupBy(): GroupMode {
+    return this.groupBy;
+  }
+
+  /**
+   * Count for the view badge: critical + major findings (the ones that should
+   * draw the user's attention). 0 means the view collapses its badge.
+   */
+  attentionCount(): number {
+    if (!this.result) return 0;
+    return this.result.findings.filter(
+      (f) => !f.dismissed && (f.severity === 'critical' || f.severity === 'major'),
+    ).length;
   }
 
   refresh() {

@@ -121,6 +121,30 @@
         "command": "claudeReviewer.setLanguageEs",
         "title": "%cmd.setLanguageEs%",
         "category": "%category.claudeReview%"
+      },
+      {
+        "command": "claudeReviewer.findings.groupBySeverity",
+        "title": "%cmd.findings.groupBySeverity%",
+        "category": "%category.claudeReview%",
+        "icon": "$(list-ordered)"
+      },
+      {
+        "command": "claudeReviewer.findings.groupByFile",
+        "title": "%cmd.findings.groupByFile%",
+        "category": "%category.claudeReview%",
+        "icon": "$(file)"
+      },
+      {
+        "command": "claudeReviewer.findings.groupByCategory",
+        "title": "%cmd.findings.groupByCategory%",
+        "category": "%category.claudeReview%",
+        "icon": "$(symbol-class)"
+      },
+      {
+        "command": "claudeReviewer.findings.refresh",
+        "title": "%cmd.findings.refresh%",
+        "category": "%category.claudeReview%",
+        "icon": "$(refresh)"
       }
     ],
     "keybindings": [
@@ -142,7 +166,32 @@
         {
           "command": "claudeReviewer.reviewBranch",
           "when": "view == claudeReviewer.findings",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeReviewer.findings.refresh",
+          "when": "view == claudeReviewer.findings",
+          "group": "navigation@2"
+        },
+        {
+          "command": "claudeReviewer.findings.groupBySeverity",
+          "when": "view == claudeReviewer.findings && claudeReviewer.findingsGroupBy != severity",
+          "group": "1_group@1"
+        },
+        {
+          "command": "claudeReviewer.findings.groupByFile",
+          "when": "view == claudeReviewer.findings && claudeReviewer.findingsGroupBy != file",
+          "group": "1_group@2"
+        },
+        {
+          "command": "claudeReviewer.findings.groupByCategory",
+          "when": "view == claudeReviewer.findings && claudeReviewer.findingsGroupBy != category",
+          "group": "1_group@3"
+        },
+        {
+          "command": "claudeReviewer.clearCache",
+          "when": "view == claudeReviewer.findings && claudeReviewer.hasResult",
+          "group": "9_danger@1"
         }
       ],
       "view/item/context": [
@@ -175,18 +224,25 @@
     "views": {
       "claudeReviewer": [
         {
+          "id": "claudeReviewer.summary",
+          "name": "%view.summary%",
+          "type": "webview"
+        },
+        {
           "id": "claudeReviewer.findings",
           "name": "%view.findings%",
           "icon": "media/icon.svg",
           "contextualTitle": "%view.container.title%"
-        },
-        {
-          "id": "claudeReviewer.summary",
-          "name": "%view.summary%",
-          "type": "webview"
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "claudeReviewer.findings",
+        "contents": "%view.findings.welcome%",
+        "when": "!claudeReviewer.hasResult"
+      }
+    ],
     "configuration": {
       "title": "%config.title%",
       "properties": {
