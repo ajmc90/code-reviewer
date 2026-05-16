@@ -18,6 +18,10 @@ No API key. No extra cost. Just your existing Claude subscription.
 
 > Reviews **any git branch against any base**, in **any language**, with **multiple reasoning passes** that question themselves, explore alternatives, and anchor every comment to an exact file + line range — with an applicable fix.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/panel-overview.png" alt="Claude Branch Reviewer — review panel" width="100%" />
+</p>
+
 ## Highlights
 
 - **🔬 Multi-pass reasoning** — five phases (discovery → specialists → consolidation → completeness → critique), each with a job. The final pass critiques the rest.
@@ -59,6 +63,10 @@ The review panel opens beside your editor. Pick a base + head, choose which pass
 ## The review panel
 
 A second-screen-worthy UI built into VS Code.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/findings-grid.png" alt="Findings grid with severity ribbons and filters" width="100%" />
+</p>
 
 | Area | What it gives you |
 |---|---|
