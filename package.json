@@ -2,7 +2,7 @@
   "name": "claude-branch-reviewer",
   "displayName": "Claude Branch Reviewer — AI Code Review",
   "description": "%description%",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ajmc90",
   "icon": "media/icon.png",
   "engines": {
@@ -232,7 +232,12 @@
         },
         "claudeReviewer.reasoningDepth": {
           "type": "string",
-          "enum": ["fast", "balanced", "deep", "obsessive"],
+          "enum": [
+            "fast",
+            "balanced",
+            "deep",
+            "obsessive"
+          ],
           "default": "deep",
           "description": "%config.reasoningDepth%"
         },
@@ -243,7 +248,12 @@
         },
         "claudeReviewer.contextFiles": {
           "type": "array",
-          "default": ["CLAUDE.md", "README.md", "CONTRIBUTING.md", "ARCHITECTURE.md"],
+          "default": [
+            "CLAUDE.md",
+            "README.md",
+            "CONTRIBUTING.md",
+            "ARCHITECTURE.md"
+          ],
           "description": "%config.contextFiles%"
         },
         "claudeReviewer.ignoreGlobs": {
@@ -274,22 +284,38 @@
       {
         "id": "claudeReviewer.critical",
         "description": "%color.critical%",
-        "defaults": { "dark": "#ff4d4f", "light": "#cf1322", "highContrast": "#ff0000" }
+        "defaults": {
+          "dark": "#ff4d4f",
+          "light": "#cf1322",
+          "highContrast": "#ff0000"
+        }
       },
       {
         "id": "claudeReviewer.major",
         "description": "%color.major%",
-        "defaults": { "dark": "#faad14", "light": "#d48806", "highContrast": "#ffaa00" }
+        "defaults": {
+          "dark": "#faad14",
+          "light": "#d48806",
+          "highContrast": "#ffaa00"
+        }
       },
       {
         "id": "claudeReviewer.minor",
         "description": "%color.minor%",
-        "defaults": { "dark": "#1890ff", "light": "#096dd9", "highContrast": "#00aaff" }
+        "defaults": {
+          "dark": "#1890ff",
+          "light": "#096dd9",
+          "highContrast": "#00aaff"
+        }
       },
       {
         "id": "claudeReviewer.nit",
         "description": "%color.nit%",
-        "defaults": { "dark": "#52c41a", "light": "#389e0d", "highContrast": "#00ff00" }
+        "defaults": {
+          "dark": "#52c41a",
+          "light": "#389e0d",
+          "highContrast": "#00ff00"
+        }
       }
     ]
   },
