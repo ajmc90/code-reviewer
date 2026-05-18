@@ -237,6 +237,15 @@ code{
   white-space: nowrap;
   align-self: flex-start;
 }
+/* Defensive bound only on badges WITHOUT the tooltip wrapper. Tip-host
+ * variants must allow overflow so the .tip popover can render outside the
+ * badge box. Normalized verdicts (enum values) always render as tip-host,
+ * so the defensive bound below only catches legacy / un-normalized data. */
+.verdict:not(.tip-host){
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .verdict[data-v="block"]                 { background: var(--sev-critical) }
 .verdict[data-v="needs-changes"]         { background: var(--sev-major); color:#1a1a1a }
 .verdict[data-v="approve-with-comments"] { background: var(--sev-minor) }
@@ -344,6 +353,14 @@ details p{ font-size: var(--t-xs); color: var(--fg-muted); line-height: 1.55 }
   letter-spacing: .06em;
   color: var(--accent-fg);
   background: var(--fg-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Same overflow protection as .verdict, scoped to non-tooltip variants. */
+.hist__verdict:not(.tip-host){
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .hist__verdict[data-v="block"]                 { background: var(--sev-critical) }
 .hist__verdict[data-v="needs-changes"]         { background: var(--sev-major); color:#1a1a1a }
@@ -365,4 +382,49 @@ details p{ font-size: var(--t-xs); color: var(--fg-muted); line-height: 1.55 }
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{ transition: none!important; animation: none!important }
 }
+
+/* Generic rich tooltip — same pattern as the review panel's .tip system,
+ * duplicated here because the sidebar webview has its own isolated CSS.
+ * Keep the rules in sync if you change the panel-side equivalent. */
+.tip-host{ position: relative }
+.tip{
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 200px;
+  max-width: 280px;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--vscode-editorWidget-background, var(--bg));
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: var(--t-xs);
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: opacity var(--dur-fast,150ms) var(--ease,ease), transform var(--dur-fast,150ms) var(--ease,ease);
+  display: grid;
+  gap: 4px;
+  white-space: normal;
+}
+.tip-host:hover > .tip,
+.tip-host:focus-visible > .tip,
+.tip-host:focus-within > .tip{
+  opacity: 1;
+  transform: translateY(0);
+}
+.tip--above{ top: auto; bottom: calc(100% + 6px); transform: translateY(2px) }
+.tip-host:hover > .tip--above,
+.tip-host:focus-visible > .tip--above,
+.tip-host:focus-within > .tip--above{ transform: translateY(0) }
+.tip--end{ left: auto; right: 0 }
+.tip__title{ font-weight: 600; color: var(--fg) }
+.tip__hint{ color: var(--fg-muted) }
 `;

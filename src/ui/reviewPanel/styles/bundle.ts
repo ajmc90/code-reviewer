@@ -3,14 +3,18 @@ import { RESET_CSS } from './fragments/reset';
 import { LAYOUT_CSS } from './fragments/layout';
 import { TWO_PANE_CSS } from './fragments/twoPaneLayout';
 import { PASS_SELECTOR_CSS } from './fragments/passSelector';
+import { COST_PILL_CSS } from './fragments/costPill';
+import { ADVANCED_OPTIONS_CSS } from './fragments/advancedOptions';
 import { BRANCH_PICKER_CSS } from './fragments/branchPicker';
 import { TIMELINE_CSS } from './fragments/timeline';
 import { LOG_CSS } from './fragments/log';
 import { RIGHT_COLUMN_CSS } from './fragments/rightColumn';
+import { RIGHT_PANE_STATE_CSS } from './fragments/rightPaneState';
 import { CHANGE_MAP_CSS } from './fragments/changeMap';
 import { RELATED_BADGE_CSS } from './fragments/relatedBadge';
 import { FINDING_CARDS_CSS } from './fragments/findingCards';
 import { RESPONSIVE_CSS } from './fragments/responsive';
+import { TOOLTIP_CSS } from './fragments/tooltip';
 
 /**
  * Concatenated CSS for the review panel webview. One inlined <style> block.
@@ -25,11 +29,15 @@ export const STYLES =
   RESET_CSS +
   LAYOUT_CSS +
   TWO_PANE_CSS +
+  TOOLTIP_CSS +
   PASS_SELECTOR_CSS +
+  ADVANCED_OPTIONS_CSS +
+  COST_PILL_CSS +
   BRANCH_PICKER_CSS +
   TIMELINE_CSS +
   LOG_CSS +
   RIGHT_COLUMN_CSS +
+  RIGHT_PANE_STATE_CSS +
   CHANGE_MAP_CSS +
   RELATED_BADGE_CSS +
   FINDING_CARDS_CSS +

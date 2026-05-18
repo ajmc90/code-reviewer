@@ -34,7 +34,10 @@ No API key. No extra cost. Just your existing Claude subscription.
 - **🔁 Apply Fix preview** — every suggested fix opens as a VS Code diff editor. Edit the right side, then Apply or Discard from the editor title.
 - **🔕 Silence noise** — dismiss findings as "this exact one" or "this pattern, everywhere". Future reviews demote matches to a `silenced` badge instead of nagging again. Restore any rule from the picker.
 - **🌐 Bilingual UI** — full English/Spanish UI with on-demand per-finding translation (each card has its own EN/ES chip).
-- **⏱ Self-calibrating runtime estimates** — the run card's "Estimated: ~X min" learns from your machine + repo. Each completed pass records its real ms-per-line, scoped both to this workspace and globally, so the estimate gets accurate after a couple of runs and scales with the actual size of the diff you're about to review.
+- **💰 Pre-flight cost estimate** — before you press RUN, a cost pill shows projected **tokens · wall-clock · USD reference** for the exact diff + passes + depth you've picked. Click it for a per-pass breakdown. A confirmation modal pops up when the estimate crosses ~200K tokens so a heavy review never starts by accident.
+- **📈 Self-calibrating estimator** — each completed pass records real token / cost / wall-clock telemetry. After 5+ runs in a workspace, a per-workspace regression replaces the cold-start heuristics — the estimate gets noticeably tighter for *your* repo + *your* machine. A `cold / partial / calibrated` badge on the pill tells you which mode it's in.
+- **♻ Session reuse** — passes share a Claude CLI session (`--session-id` / `--resume`) so the cached prompt context isn't paid for on every pass. Cuts review cost ~60-70% on large diffs. Toggleable from the Advanced Options panel.
+- **⚙ Advanced Options panel** — depth (`fast / balanced / deep / obsessive`), session reuse, and developer diagnostics live inline next to the pass selector with the trade-off explained per option. Changes update settings.json and the cost estimate live.
 - **🧩 Adapts to your project** — auto-detects language, framework, tests, and reads `CLAUDE.md` / `README.md` / `CONTRIBUTING.md` / `ARCHITECTURE.md`.
 - **🔐 No API key** — talks to the `claude` CLI you're already logged into.
 
@@ -75,11 +78,16 @@ A second-screen-worthy UI built into VS Code.
 |---|---|
 | **Branch picker** | Local + remote branches, filterable, with last author / subject / age. Fetch & prune with one click; ahead/behind counter. SSH-passphrase prompts handled inline. |
 | **Analysis passes** | Pill checkboxes grouped by phase (Discovery, Specialists, Completeness, Critique). Presets — *fast*, *deep*, *security focus*, *performance focus*, *accessibility focus* — flip the right set with one click. Per-pass tooltips explain what each does. Advanced toggle hides the granular controls when you don't need them. Selection persists across sessions. |
-| **Run card** | Sticky bottom card summarizes branches + active passes + estimated runtime. One ▶ button covers Start / Stop. Live progress chips during a run: phase, findings found, elapsed time. The estimate is **self-calibrating**: it preflights the real diff size (`+adds / -dels / files`) and combines it with the median ms-per-line of your previous runs (per-workspace + per-machine), tagged in the UI as `calibrated` or `partially calibrated` so you can tell when it's still warming up. |
-| **Live activity** | Real-time timeline of each pass: queued → running → done, with elapsed time, a streaming snippet of what Claude is thinking, and inline Retry / Skip / Stop on failure. |
+| **Advanced Options** | Lives inside the same *Advanced* collapsible: a segmented `fast / balanced / deep / obsessive` depth picker, a *Session reuse* toggle (`~60-70% cheaper`), and a *Developer diagnostics* toggle. Every change writes through to `settings.json` and re-runs the cost estimate so the pill stays in sync. |
+| **Cost pill** | Above the RUN button: `~95K tokens · ~6 min · $0.45 ref` with a `cold / partial / calibrated` confidence badge. Click for a per-pass breakdown popover (tokens per pass + low / high / worst-case range + the human-readable factors driving the estimate: depth, session reuse, sample-count corrections). Auto-positions up or down depending on viewport space. |
+| **Confirm-large-run modal** | When the estimate crosses ~200K tokens, pressing RUN opens a modal: headline tokens + range, "what's in this review" (files / lines / driving factors), subscription-cost disclaimer, and a "don't ask again under N tokens" checkbox that bumps your personal threshold to the next clean tier (250K / 500K / 1M / 2M / 5M). Escape, click-outside, or Cancel back out cleanly. |
+| **Run card** | Sticky bottom card summarizes branches + active passes. One ▶ button covers Start / Stop. Live progress chips during a run: phase, findings found, elapsed time. The log lives collapsed inside the run card as an audit trail. |
+| **Welcome surface** | When idle and no findings exist, the right pane shows the welcome panel: branches + diff preview + estimate, the four-phase pipeline cards, a big RUN proxy of the left button, the `Cmd+Alt+R` shortcut, a privacy reminder, and a daily-rotating tip. |
+| **In-progress surface** | While the review is running and no findings have arrived yet, the right pane shows the in-progress panel: live tokens spent, files reviewed (with kind + blast-radius chips), elapsed time, animated skeleton placeholders. Once findings start arriving, a sticky progress header above the findings grid keeps those live signals visible. |
+| **Live activity** | Real-time timeline of each pass: queued → running → done, with elapsed time, a streaming snippet of what Claude is thinking, and inline Retry / Skip / Stop on failure. Each completed pass also drops a `◆ $0.0123 in=42K (cache 78%) out=1.2K 8.3s` telemetry line so the cost shape is visible without opening the output channel. |
 | **Change map** | When the explore pass classifies each changed file (`new-feature`, `refactor`, `bugfix`, `migration`, `config`, `deps`, `test`, `docs`, `style`) with a blast-radius badge, the panel surfaces it as a collapsible map above the findings grid. |
-| **Log** | Raw streaming output, severity-colored. Copy or clear. |
-| **Executive summary** | Verdict, risk score, top concerns, strengths — emitted once the review finishes. |
+| **Log** | Raw streaming output, severity-colored. Collapsed inside the run card by default — toggle to expand. Copy or clear. |
+| **Executive summary** | Verdict, risk score, top concerns, strengths — emitted once the review finishes. Verdict strings the model occasionally writes as full sentences (`"DO NOT MERGE…"`) get normalized into the badge enum so the sidebar layout never breaks. |
 | **Findings grid** | Problem ↔ Solution cards. Severity ribbon, category badge, jump-to-code, apply fix, ask follow-up, dismiss / restore. Per-card EN/ES chip translates that finding on demand. "Related" badges link refinements back to their original finding. |
 | **Filters** | Severity chips (critical / major / minor / nit / **praise** / silenced / **revised**) + category chips (security, accessibility, performance, …) with live counts + free-text search. Combine freely. *Praise* is a positive-signal severity — Claude calls out things the diff did well (good test coverage, clean abstractions, careful error handling) so the review isn't only negative. The *Revised* chip surfaces critique's audit trail; on the **All** filter, silenced + revised findings drop below a labeled separator so the main severity flow stays focused. |
 | **Collapse + resize** | Click ‹ to collapse the left pane into a vertical rail showing branches, current pass, spinner, and live severity counts. Drag the gutter between panes to resize (or `←/→` while focused, `Home/End` for min/max, dbl-click to reset). Width and collapse state persist. |
@@ -160,6 +168,62 @@ Dropped and merged findings don't appear in the main severity flow — they sit 
 
 ---
 
+## Cost estimate & calibration
+
+Before you press RUN, the panel preflights the actual diff (`git diff base...head`) and asks the estimator what a review of *this* diff with *these* passes at *this* depth will cost. The result lands in the cost pill above the RUN button.
+
+**What the estimate shows**
+
+- **Central tokens** — projected sum of effective input + output tokens across every planned pass. The headline metric, because subscription users pay in token budget, not USD.
+- **Wall-clock duration** — per-pass baseline scaled by diff size (sub-linear curve) and depth multiplier.
+- **USD reference** — what the same call sequence would cost at API-direct prices (Opus 4.7 1M, current cache/output tiers). Shown smaller, with a disclaimer that subscription users don't pay this amount.
+- **Confidence badge** — `cold` (no samples yet, hardcoded coefficients), `partial` (1-4 samples — not enough for the regression), or `calibrated` (5+ samples — per-workspace correction is active).
+- **Per-pass breakdown** — click the pill: token cost per pass + low / high / worst-case range + the human-readable factors (`session reuse on — saves ~15% on input tokens`, `depth=obsessive adds ~40% over deep`, `calibrated from 7 prior runs (×0.82 duration, ×0.91 cost)`, …).
+
+**Cost components the estimator models**
+
+- Per-pass base prompt (system preamble + JSON contract + pass instructions).
+- Diff context tokens (raw diff for structural; enriched diff = raw + loaded file content for the rest).
+- Per-pass output tokens, scaled by depth and by the running count of prior findings (critique re-serializes every prior finding — it grows fastest).
+- Cache reuse curve: when session reuse is on, pass N within a session sees a ~`min(0.85, 0.4 + 0.07·N)` cache-read hit ratio. Modeled per-pass-index.
+- Haiku-vs-Opus overhead from the CLI's internal routing.
+- Variance band: low ×0.7, high ×1.5, worst-case ×2.5.
+
+**How calibration works**
+
+Every completed pass emits a telemetry record (token buckets, cost, cache split, model breakdown, tools invoked, retries, durations) — prefixed `[telemetry]` in the output channel as one-line NDJSON, plus a human-readable ◆ line in the live log. At end-of-review the orchestrator aggregates them into a sample, stored in two scopes:
+
+- **workspaceState** — narrow, fits this repo's diff shapes and patterns.
+- **globalState** — broader fallback across repos.
+
+The estimator prefers workspace samples once 5+ exist; otherwise falls back to global, then to hardcoded coefficients. The regression fits a per-scope multiplicative correction (median actual ÷ predicted ratio, clamped 0.4×–2.5×) and surfaces MAPE so the confidence badge can flag drift. A schema version on each sample invalidates older ones when coefficients change so stale data can't poison the fit.
+
+**Confirmation threshold**
+
+When the central estimate crosses **200,000 tokens**, pressing RUN opens a confirmation modal instead of starting immediately. You can opt out under your own threshold via the "don't ask again" checkbox — it bumps your threshold to the next clean tier (100K / 250K / 500K / 1M / 2M / 5M / 10M) so suppression is intuitive. The preference is panel-local (per webview, via `vscode.setState`), not a project setting.
+
+**Debug commands**
+
+- `Claude Review: Estimate Review Cost (Debug)` — print the full estimator output (per-pass tokens, USD, factors, sample counts) to the output channel without running anything.
+- `Claude Review: Dump Estimator Samples (Debug)` — dump every persisted sample so you can see what the regression is fitting.
+
+---
+
+## Session reuse
+
+When session reuse is on (default), the orchestrator opens **two** Claude CLI sessions per review and shares each across the passes that fit:
+
+- **`withTools` session** — structural pass only (tools: Read, Grep, Glob).
+- **`noTools` session** — explore + specialists + completeness + critique + summary (no tools).
+
+Each first call inside a session uses `--session-id <uuid>`; every subsequent call uses `--resume <uuid>` so the prompt cache from the previous call is reused. The CLI reports the saving as cache-read tokens (typically 10× cheaper than fresh input). Empirically: ~60-70% cost reduction vs. spawning isolated CLI processes per pass.
+
+If `--resume` ever fails (session expired, corrupted state), the orchestrator resets that session and the next pass creates a fresh one — the review keeps running, you just lose cache reuse for one call.
+
+Toggle it via the Advanced Options panel or `claudeReviewer.useSessionReuse`. Disable only if you suspect cross-pass interference (the prompt cache holds every prior call's context).
+
+---
+
 ## Reasoning depth
 
 | Depth | Behavior |
@@ -186,6 +250,8 @@ Dropped and merged findings don't appear in the main severity flow — they sit 
 | `Claude Review: Retry a Single Pass` | — |
 | `Claude Review: Discard Paused Review` | — |
 | `Claude Review: Export Review Report (Markdown)` | — |
+| `Claude Review: Estimate Review Cost (Debug)` | — |
+| `Claude Review: Dump Estimator Samples (Debug)` | — |
 | `Claude Review: Clear Review Cache` | — |
 
 **Per-finding actions** *(from the panel, findings tree, or command palette on a selected finding)*
@@ -227,7 +293,10 @@ Dropped and merged findings don't appear in the main severity flow — they sit 
 | `claudeReviewer.passes` | all enabled | Project-level default for which passes run (the panel overrides per review) |
 | `claudeReviewer.maxDiffBytes` | `1500000` | Chunk threshold for huge diffs |
 | `claudeReviewer.contextFiles` | `[CLAUDE.md, README.md, CONTRIBUTING.md, ARCHITECTURE.md]` | Project docs Claude always reads |
-| `claudeReviewer.ignoreGlobs` | sensible defaults | Glob patterns to exclude |
+| `claudeReviewer.ignoreGlobs` | sensible defaults | Glob patterns to exclude from the review entirely |
+| `claudeReviewer.contextExcludeGlobs` | lockfiles + snapshots | Glob patterns whose **content** is omitted from the prompt context but whose files still appear in the changed-files list. Stops auto-generated content (lockfiles, `__snapshots__`, generated locales) from inflating the prompt without informing the review. Distinct from `ignoreGlobs`. |
+| `claudeReviewer.useSessionReuse` | `true` | Reuse the Claude CLI session between passes to share prompt-cache hits. Cuts review cost ~60-70%. Toggleable from the Advanced Options panel. |
+| `claudeReviewer.developerDiagnostics` | `false` | Emit a structured per-finding dump (`[devfinding] {...}`) plus per-pass finding summaries to the output channel at end of run, for A/B comparing prompt or cost-saving changes against a baseline. Toggleable from the Advanced Options panel. |
 | `claudeReviewer.cliTimeoutMs` | `600000` | Per-pass CLI timeout |
 | `claudeReviewer.includeUntrackedFiles` | `false` | Include untracked files in the review |
 
@@ -250,7 +319,7 @@ The codebase is organized into focused modules — no file mixes presentation, b
 
 ```text
 src/
-├── extension.ts                  # VS Code entry: builds runtime, wires deps, hooks the calibration bus
+├── extension.ts                  # VS Code entry: builds runtime, wires deps
 ├── types.ts                      # Finding / ReviewResult / ProjectContext shapes + isVisibleFinding() predicate
 │
 ├── i18n/
@@ -266,7 +335,7 @@ src/
 │   └── sshAuth.ts                # interactive SSH-key unlock
 │
 ├── claude/
-│   ├── cliClient.ts              # spawns `claude --print` — no API key
+│   ├── cliClient.ts              # spawns `claude --print` — no API key; parses usage/cost/modelUsage from the result event and supports --session-id / --resume for session reuse
 │   ├── prompts.ts                # compat re-export of ./prompts
 │   ├── prompts/
 │   │   ├── index.ts              # public prompt API
@@ -282,7 +351,7 @@ src/
 │   │       ├── gaps.ts
 │   │       ├── permute.ts
 │   │       └── critique.ts
-│   ├── parser.ts                 # normalises + dedupes Claude's JSON + relates findings
+│   ├── parser.ts                 # normalises + dedupes Claude's JSON + relates findings (incl. normalizeVerdict — coerces full-sentence verdicts back into the enum)
 │   ├── critiqueParser.ts         # parses critique's decision-by-id contract
 │   ├── structuralParser.ts       # parses the structural-exploration pass
 │   ├── translator.ts             # batched on-demand finding translation
@@ -299,7 +368,6 @@ src/
 │   ├── partialState.ts           # compat re-export → ./stores/partialState
 │   ├── historyStore.ts           # compat re-export → ./stores/historyStore
 │   ├── silenceStore.ts           # compat re-export → ./stores/silenceStore
-│   ├── calibration.ts            # compat re-export → ./stores/calibration
 │   ├── reviewController.ts       # compat re-export → ./controllers/reviewController
 │   ├── reportMarkdown.ts         # ReviewResult → Markdown export (incl. critique audit section)
 │   ├── events/
@@ -308,18 +376,26 @@ src/
 │   ├── stores/
 │   │   ├── partialState.ts       # paused-review state load / save / summarise
 │   │   ├── historyStore.ts       # last-N reviews, per-(base, head) index + full results
-│   │   ├── silenceStore.ts       # persisted dismiss rules + apply-to-findings matcher
-│   │   └── calibration.ts        # self-calibrating ms-per-line samples (workspace + global)
+│   │   └── silenceStore.ts       # persisted dismiss rules + apply-to-findings matcher
 │   ├── controllers/
-│   │   └── reviewController.ts   # runReview / executeReviewLoop / orchestrator wiring
+│   │   └── reviewController.ts   # runReview / executeReviewLoop / orchestrator wiring + estimator-sample recording
+│   ├── estimator/                # pre-flight cost estimate + per-workspace calibration
+│   │   ├── index.ts              # estimateReviewCost() + buildEstimatorInput() — pure pricing math
+│   │   ├── coefficients.ts       # per-pass base tokens, output scaling, depth multipliers, Opus 4.7 1M pricing, cache hit curve, variance bands; schema-versioned
+│   │   ├── regression.ts         # fits a multiplicative correction (clamped 0.4×-2.5×) from real samples + MAPE diagnostic
+│   │   └── sampleStore.ts        # workspaceState + globalState sample arrays (≤20 each), drops samples on coefficient-schema bump
 │   └── orchestrator/
-│       ├── index.ts              # ReviewOrchestrator class (thin)
-│       ├── types.ts              # OrchestratorDeps
+│       ├── index.ts              # ReviewOrchestrator class (thin) — wires the metrics accumulator + dev diagnostics
+│       ├── types.ts              # OrchestratorDeps + ReviewMetricsSummary
 │       ├── errors.ts             # ReviewPausedError
 │       ├── state.ts              # bootstrapState / hydrateForResume / computePlannedPasses
 │       ├── phaseLoop.ts          # five-phase pipeline driver
-│       ├── passRunner.ts         # executePassWithDecisions / runPlannedPass / shouldRun
-│       ├── cli.ts                # runCli / runCliWithTools
+│       ├── passRunner.ts         # executePassWithDecisions / runPlannedPass / shouldRun + telemetry emit per pass
+│       ├── cli.ts                # runCli / runCliWithTools — bridges to ClaudeCliClient and threads session ids
+│       ├── sessionManager.ts     # two-session bundle (withTools / noTools) — UUIDs + initialized flag + reset on resume failure
+│       ├── metrics.ts            # PassMetrics shape + effectiveInputTokens (fresh + cacheRead + cacheCreation)
+│       ├── telemetry.ts          # emitTelemetry NDJSON + human ◆ line + ReviewMetricsAccumulator
+│       ├── devDiagnostics.ts     # [devfinding] / [devhidden] end-of-run dump for A/B comparison (off by default)
 │       ├── helpers.ts            # tagPass / stripIdForPrompt / report / checkCancel
 │       ├── diffSummarizer.ts     # oversized-diff chunker
 │       └── passes/
@@ -336,27 +412,31 @@ src/
 │   ├── index.ts                  # registerAllCommands(rt, panelDeps)
 │   ├── reviewCommands.ts         # show / run / cancel / resume / retry / discard
 │   ├── findingCommands.ts        # open / applyFix(+confirm/cancel) / dismiss / restore / ask
-│   └── miscCommands.ts           # export / language / groupBy / refresh
+│   └── miscCommands.ts           # export / language / groupBy / refresh + estimateReview (debug) + dumpSamples (debug)
 │
 └── ui/
     ├── reviewPanel.ts            # barrel re-export
     ├── reviewPanel/
-    │   ├── index.ts              # ReviewPanel class (lifecycle, message routing, calibration refresh)
-    │   ├── template.ts           # HTML body
+    │   ├── index.ts              # ReviewPanel class (lifecycle, message routing, estimate + settings round-trip)
+    │   ├── template.ts           # HTML body — includes cost pill + advanced options slot inside run card
     │   ├── client.ts             # compat re-export of ./client/bundle
     │   ├── styles.ts             # compat re-export of ./styles/bundle
-    │   ├── branchOps.ts          # branch snapshot + preflight diff stats + SSH-unlock fetch helper
+    │   ├── branchOps.ts          # branch snapshot + SSH-unlock fetch helper
     │   ├── sanitize.ts           # sanitizePasses (input validation)
     │   ├── client/
     │   │   ├── bundle.ts         # buildClientScript(lang) — stitches the fragments together
     │   │   └── fragments/
     │   │       ├── boot/         # prelude / postlude / i18n bootstrap
-    │   │       ├── core/         # state, dedup, runtime estimate, passes registry, utils
+    │   │       ├── core/         # state, dedup, passes registry, utils
     │   │       ├── handlers/     # buttons, collapse, DOM, event stream, message router
-    │   │       └── renderers/    # branch picker, run card, timeline, findings, change map, counters, rail, …
+    │   │       └── renderers/    # branch picker, run card, timeline, findings, change map, counters, rail,
+    │   │                         # cost pill (estimate chip + breakdown popover), confirm-run modal,
+    │   │                         # advanced options (depth/sessionReuse/devDiag), right-pane state
+    │   │                         # (welcome / in-progress / message + sticky in-progress header), …
     │   └── styles/
     │       ├── bundle.ts         # composes the fragments into one stylesheet
-    │       └── fragments/        # tokens, layout, two-pane, findings cards, change map, timeline, …
+    │       └── fragments/        # tokens, layout, two-pane, findings cards, change map, timeline,
+    │                             # cost pill, advanced options, right-pane state, unified tooltip (.tip / .tip-host), …
     ├── summaryView.ts            # barrel re-export
     ├── summaryView/
     │   ├── index.ts              # SummaryViewProvider (sidebar dashboard)

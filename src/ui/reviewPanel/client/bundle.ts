@@ -7,12 +7,11 @@ import { PRELUDE } from './fragments/boot/prelude';
 import { I18N } from './fragments/boot/i18n';
 import { POSTLUDE } from './fragments/boot/postlude';
 
-// Core: constants + pure utilities + shared state + estimator + dedupe.
+// Core: constants + pure utilities + shared state + dedupe.
 // No DOM writes. Anything in renderers/ or handlers/ depends on this layer.
 import { PASSES } from './fragments/core/passes';
 import { UTILS } from './fragments/core/utils';
 import { STATE } from './fragments/core/state';
-import { ESTIMATE } from './fragments/core/estimate';
 import { DEDUP } from './fragments/core/dedup';
 
 // Renderers: every render* / build* function. Read state, write DOM.
@@ -24,8 +23,12 @@ import { CHANGE_MAP } from './fragments/renderers/changeMap';
 import { RAIL } from './fragments/renderers/rail';
 import { BRANCH_PICKER } from './fragments/renderers/branchPicker';
 import { RUN_CARD } from './fragments/renderers/runCard';
+import { COST_PILL } from './fragments/renderers/costPill';
+import { CONFIRM_RUN } from './fragments/renderers/confirmRun';
+import { ADVANCED_OPTIONS } from './fragments/renderers/advancedOptions';
 import { TIMELINE } from './fragments/renderers/timeline';
 import { FINDINGS } from './fragments/renderers/findings';
+import { RIGHT_PANE_STATE } from './fragments/renderers/rightPaneState';
 import { PASS_SELECTOR } from './fragments/renderers/passSelector';
 
 // Handlers: DOM event listeners + the host-message router. Reactions to user
@@ -48,9 +51,8 @@ import { MESSAGE_ROUTER } from './fragments/handlers/messageRouter';
  * Load order is the dependency order:
  *   1. boot.prelude        opens IIFE, captures vscode + $ helpers
  *   2. boot.i18n           seeds the message dictionary used by tMsg
- *   3. core.*              constants → utils → state → estimator → dedupe
- *      (state must precede everything that reads it; estimator + dedupe both
- *      read state.)
+ *   3. core.*              constants → utils → state → dedupe
+ *      (state must precede everything that reads it; dedupe reads state.)
  *   4. renderers.*         every render function that writes DOM
  *   5. handlers.collapse   layout control (drag + collapse + keyboard)
  *   6. handlers.domHandlers + buttons   wires document + #btn-* listeners
@@ -66,7 +68,6 @@ function assembleClientScript(): string {
     PASSES,
     UTILS,
     STATE,
-    ESTIMATE,
     DEDUP,
     // renderers
     COUNTERS,
@@ -77,8 +78,12 @@ function assembleClientScript(): string {
     RAIL,
     BRANCH_PICKER,
     RUN_CARD,
+    COST_PILL,
+    CONFIRM_RUN,
+    ADVANCED_OPTIONS,
     TIMELINE,
     FINDINGS,
+    RIGHT_PANE_STATE,
     PASS_SELECTOR,
     // handlers
     COLLAPSE,

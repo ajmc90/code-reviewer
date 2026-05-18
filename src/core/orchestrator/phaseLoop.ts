@@ -31,7 +31,7 @@ export async function runRemainingPasses(
 
   if (state.opts.passes.explore && shouldRun(deps, 'explore', state)) {
     await executePassWithDecisions(deps, 'explore', 'Exploration', 10, state, async () => {
-      const { findings: rawFindings, changeMap } = await runExplorePass(deps, state);
+      const { findings: rawFindings, changeMap, metrics } = await runExplorePass(deps, state);
       // Same intra-pass dedupe as runPlannedPass — catches the case where the
       // LLM repeats the same finding twice in one response.
       const findings = dedupeFindings(rawFindings);
@@ -44,7 +44,7 @@ export async function runRemainingPasses(
         events?.emit({ kind: 'changeMap', entries: changeMap, at: Date.now() });
       }
       for (const f of findings) events?.emit({ kind: 'findingAdded', finding: f, at: Date.now() });
-      return findings.length;
+      return { findingCount: findings.length, metrics };
     });
   }
 
@@ -87,7 +87,7 @@ export async function runRemainingPasses(
   if (state.opts.passes.critique && shouldRun(deps, 'critique', state)) {
     events?.emit({ kind: 'phaseStart', phase: 'critique', at: Date.now() });
     await executePassWithDecisions(deps, 'critique', 'Self-critique', 8, state, async () => {
-      const { findings: all, counts } = await runCritiquePass(deps, state);
+      const { findings: all, counts, metrics } = await runCritiquePass(deps, state);
       // Critique returns the FULL set: kept + revised + new (visible) +
       // dropped + merged (hidden by default, surfaced in the "Revised" chip).
       // Dedupe only across the VISIBLE subset — running dedupe on dropped
@@ -121,7 +121,7 @@ export async function runRemainingPasses(
       });
       // The passDone findingCount should reflect the VISIBLE set — what the
       // user will actually see in the grid — not the audit-trail total.
-      return dedupedVisible.length;
+      return { findingCount: dedupedVisible.length, metrics };
     });
     // One last consolidation after critique to clean residual duplicates in
     // the visible subset. Skip dropped/merged entries — they live in

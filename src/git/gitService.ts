@@ -57,6 +57,16 @@ export class GitService {
     return (await this.exec(['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
   }
 
+  /**
+   * Switch the working tree to `branch`. Bare `git checkout` — no force, no
+   * stash. If the working tree has unstaged conflicts the git process exits
+   * non-zero and our exec wrapper rejects, so the caller can surface the
+   * error verbatim to the user instead of silently destroying their edits.
+   */
+  async checkout(branch: string): Promise<void> {
+    await this.exec(['checkout', branch]);
+  }
+
   async listBranches(): Promise<string[]> {
     const out = await this.exec(['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes']);
     return out.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -261,6 +271,51 @@ export function parseUnifiedDiff(raw: string): DiffFile[] {
 
 export function shouldIgnore(file: string, globs: string[]): boolean {
   return globs.some((g) => globMatch(g, file));
+}
+
+/**
+ * Strip per-file sections out of a raw unified diff. Used to drop the diff
+ * content of files matched by `contextExcludeGlobs` (e.g. lockfiles, snapshots)
+ * without affecting the changed-files list — the user still sees that the file
+ * changed, the model just doesn't pay cache_creation for hunks that wouldn't
+ * inform the review.
+ *
+ * Operates on the raw string (not on parsed hunks) to preserve git's exact
+ * output format. The diff is partitioned at `diff --git a/... b/...` headers,
+ * which is git's contract for per-file boundaries.
+ *
+ * Returns the diff text with excluded files replaced by a one-line marker so
+ * the model knows the file changed but the content was omitted by policy.
+ */
+export function stripExcludedFilesFromDiff(rawDiff: string, excludedPaths: Set<string>): string {
+  if (excludedPaths.size === 0 || !rawDiff) return rawDiff;
+  const lines = rawDiff.split('\n');
+  const out: string[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const m = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (!m) {
+      // Pre-header noise (shouldn't normally exist before first diff header);
+      // keep as-is for safety.
+      out.push(line);
+      i++;
+      continue;
+    }
+    const filePath = m[2];
+    // Find the start of the next file section (or end of input).
+    let j = i + 1;
+    while (j < lines.length && !lines[j].startsWith('diff --git ')) j++;
+    if (excludedPaths.has(filePath)) {
+      out.push(`diff --git a/${filePath} b/${filePath}`);
+      out.push(`(file content omitted from review context by claudeReviewer.contextExcludeGlobs)`);
+      out.push('');
+    } else {
+      for (let k = i; k < j; k++) out.push(lines[k]);
+    }
+    i = j;
+  }
+  return out.join('\n');
 }
 
 function globMatch(pattern: string, str: string): boolean {

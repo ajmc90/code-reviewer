@@ -1,7 +1,7 @@
 import { ChangeMapEntry, DiffFile, FindingIndexEntry, ProjectContext, ReasoningDepth } from '../../../types';
 import { Lang } from '../../../i18n';
 import { buildSystemPreamble } from '../system';
-import { JSON_CONTRACT, antiDuplicationBlock, changeMapBlock } from '../shared';
+import { JSON_CONTRACT_FINDINGS_ONLY, antiDuplicationBlock, changeMapBlock } from '../shared';
 
 export function buildGapsPrompt(args: {
   ctx: ProjectContext;
@@ -53,7 +53,7 @@ export function buildGapsPrompt(args: {
     'Use category "other" unless one of these fits better: "tests", "docs", "api-contract", "data-integrity", "architecture", "accessibility".',
     'If nothing is genuinely missing beyond what prior passes caught, return findings: [].',
     '',
-    JSON_CONTRACT,
+    JSON_CONTRACT_FINDINGS_ONLY,
   ]
     .filter(Boolean)
     .join('\n');

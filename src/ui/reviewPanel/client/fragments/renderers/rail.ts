@@ -57,5 +57,19 @@ export const RAIL = `
     $('#rail-c-major').textContent    = counts.major;
     $('#rail-c-minor').textContent    = counts.minor;
     $('#rail-c-nit').textContent      = counts.nit;
+    // Tag empty stats so the stacked-collapsed view can hide them — reduces
+    // strip clutter when half the severities are zero (the common case).
+    const stats = [
+      ['#rail-c-critical', counts.critical],
+      ['#rail-c-major', counts.major],
+      ['#rail-c-minor', counts.minor],
+      ['#rail-c-nit', counts.nit],
+    ];
+    for (const [sel, n] of stats){
+      const el = $(sel);
+      if (!el) continue;
+      const stat = el.closest('.rail-stat');
+      if (stat) stat.setAttribute('data-zero', n === 0 ? '1' : '0');
+    }
   }
 `;

@@ -12,8 +12,10 @@ export function extractTranslatedFields(f: Finding): any {
     questionsRaised: f.questionsRaised,
     alternativesConsidered: f.alternativesConsidered,
     evidence: f.evidence,
+    // Only the prose description is translated; oldString/newString/
+    // replacement are code and must not be sent through the translator.
     suggestedFix: f.suggestedFix
-      ? { description: f.suggestedFix.description, replacement: f.suggestedFix.replacement }
+      ? { description: f.suggestedFix.description }
       : undefined,
   };
 }

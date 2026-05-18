@@ -85,7 +85,7 @@ export function buildCritiquePrompt(args: {
     '    questionsRaised: string[]; alternativesConsidered: string[]; evidence: string[];',
     '    confidence: "high" | "medium" | "low";',
     '    relatedFiles: string[];',
-    '    suggestedFix?: { description: string; replacement: string; confidence: "high"|"medium"|"low" };',
+    '    suggestedFix?: { description: string; oldString: string; newString: string; contextBefore?: string; contextAfter?: string; confidence: "high"|"medium"|"low" };',
     '  }',
     '',
     'File paths and line numbers MUST be real and verifiable in the diff. Never invent code not in the diff or context.',

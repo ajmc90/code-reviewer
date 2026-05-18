@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import { GitService } from '../../git/gitService';
 import { ReviewOrchestrator, ReviewPausedError } from '../orchestrator';
+import { createReviewSessions } from '../orchestrator/sessionManager';
+import { SampleStore } from '../estimator/sampleStore';
+import { COEFFICIENTS_SCHEMA_VERSION } from '../estimator/coefficients';
 import { ReviewPanel } from '../../ui/reviewPanel';
 import { PassFailureDecision, PassName } from '../events/events';
 import { Finding, PartialReviewState, PassConfig, ReviewOptions } from '../../types';
@@ -13,9 +16,11 @@ function buildOrchestrator(
   root: string,
   token: vscode.CancellationToken,
   progress: vscode.Progress<{ message?: string; increment?: number }>,
-  extra: { resumeFrom?: PartialReviewState | null; restrictToPasses?: PassName[] } = {},
+  extra: { resumeFrom?: PartialReviewState | null; restrictToPasses?: PassName[]; opts?: ReviewOptions } = {},
 ): ReviewOrchestrator {
   const cfg = vscode.workspace.getConfiguration('claudeReviewer');
+  const useSessionReuse = cfg.get<boolean>('useSessionReuse', true);
+  const sampleStore = new SampleStore(rt.ctx);
   return new ReviewOrchestrator({
     git: new GitService(root),
     cli: rt.buildCli(),
@@ -26,8 +31,24 @@ function buildOrchestrator(
     model: cfg.get<string>('model', '') || undefined,
     cliTimeoutMs: cfg.get<number>('cliTimeoutMs', 600000),
     ignoreGlobs: cfg.get<string[]>('ignoreGlobs', []),
+    contextExcludeGlobs: cfg.get<string[]>('contextExcludeGlobs', [
+      '**/package-lock.json',
+      '**/yarn.lock',
+      '**/pnpm-lock.yaml',
+      '**/Cargo.lock',
+      '**/Gemfile.lock',
+      '**/composer.lock',
+      '**/poetry.lock',
+      '**/__snapshots__/**',
+      '**/*.snap',
+    ]),
     contextFiles: cfg.get<string[]>('contextFiles', []),
     maxDiffBytes: cfg.get<number>('maxDiffBytes', 1500000),
+    developerDiagnostics: cfg.get<boolean>('developerDiagnostics', false),
+    // One pair of sessions per orchestrator instance (= per review). When the
+    // setting is off, we omit sessions entirely so the CLI wrappers fall back
+    // to spawning isolated processes (legacy behavior).
+    sessions: useSessionReuse ? createReviewSessions() : undefined,
     events: rt.bus,
     resumeFrom: extra.resumeFrom ?? null,
     restrictToPasses: extra.restrictToPasses,
@@ -39,6 +60,34 @@ function buildOrchestrator(
         rt.pendingDecisions.set(pass, resolve);
         rt.bus.emit({ kind: 'passAwaitDecision', pass, error, at: Date.now() });
       }),
+    // Persist per-review metrics to the sample store so the estimator can
+    // calibrate over time. Skipped for resume/retry runs because they don't
+    // execute the whole pipeline — recording a partial sample would skew
+    // future predictions toward "reviews are cheaper than they really are."
+    onReviewMetrics: extra.resumeFrom || extra.restrictToPasses?.length
+      ? undefined
+      : (summary) => {
+          const reviewOpts = extra.opts;
+          if (!reviewOpts) return;
+          void sampleStore.recordSample({
+            at: Date.now(),
+            schemaVersion: COEFFICIENTS_SCHEMA_VERSION,
+            rawDiffBytes: 0,  // populated below if available
+            enrichedDiffBytes: summary.enrichedDiffBytes,
+            linesAdded: 0,
+            linesRemoved: 0,
+            filesChanged: 0,
+            passes: summary.passesRun as PassName[],
+            depth: reviewOpts.depth,
+            useSessionReuse,
+            estimatedFindingsCount: 0,
+            actualFindingsCount: summary.actualFindingsCount,
+            totalTokens: summary.totalTokens,
+            totalUsd: summary.totalUsd,
+            totalDurationMs: summary.totalDurationMs,
+            perPassUsd: summary.perPassUsd as Partial<Record<PassName, number>>,
+          });
+        },
   });
 }
 
@@ -175,7 +224,7 @@ export async function executeReviewLoop(
       async (progress, progressToken) => {
         progressToken.onCancellationRequested(() => cts.cancel());
         try {
-          const orchestrator = buildOrchestrator(rt, root, cts.token, progress, { resumeFrom, restrictToPasses });
+          const orchestrator = buildOrchestrator(rt, root, cts.token, progress, { resumeFrom, restrictToPasses, opts });
           const result = await orchestrator.review(opts);
           await rt.setResult(result);
           if (!restrictToPasses || restrictToPasses.length === 0) {

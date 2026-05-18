@@ -3,7 +3,7 @@ import type { Lang, MsgKey } from '../../i18n';
 export type Tr = (key: MsgKey, params?: Record<string, string | number>) => string;
 export type TrE = (key: MsgKey, params?: Record<string, string | number>) => string;
 
-export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
+export function renderBody(lang: Lang, _tr: Tr, trE: TrE): string {
   return `
 <body>
 <div class="app">
@@ -14,9 +14,22 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
       <span>${trE('panel.brand')}</span>
     </div>
     <span id="branches" class="branches-pill" aria-live="polite"></span>
-    <span id="verdict" class="verdict" data-v="idle" role="status" aria-live="polite">${trE('panel.verdictIdle')}</span>
+    <span id="verdict" class="verdict tip-host" data-v="idle" role="status" aria-live="polite" tabindex="0">
+      <span id="verdict-label">${trE('panel.verdictIdle')}</span>
+      <!--
+        Header verdict sits at the very top of the viewport, so the tooltip
+        MUST open downward — tip--above would clip outside the window and be
+        invisible. Combined with tip--end so the popover aligns to the right
+        edge of the badge (the badge is near the right side of the header,
+        opening from the left edge could also clip the viewport).
+      -->
+      <span id="verdict-tip" class="tip tip--end" role="tooltip" hidden>
+        <span class="tip__title" id="verdict-tip-title"></span>
+        <span class="tip__hint" id="verdict-tip-hint"></span>
+      </span>
+    </span>
     <span class="spacer"></span>
-    <div class="counters" role="group" aria-label="${trE('panel.findingsBySeverity')}">
+    <div class="counters" role="group" aria-label="${trE('panel.findingsBySeverity')}" data-empty="1">
       <span class="counter" data-sev="critical" title="${trE('panel.criticalFindings')}"><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.critical')}:</span><b id="c-critical">0</b></span>
       <span class="counter" data-sev="major"    title="${trE('panel.majorFindings')}"   ><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.major')}:</span><b id="c-major">0</b></span>
       <span class="counter" data-sev="minor"    title="${trE('panel.minorFindings')}"   ><span class="swatch" aria-hidden="true"></span><span class="sr-only">${trE('panel.minor')}:</span><b id="c-minor">0</b></span>
@@ -62,8 +75,8 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
             <p id="resume-banner-detail"></p>
           </div>
           <div class="actions">
-            <button class="primary" type="button" id="btn-resume">${trE('panel.resume')}</button>
-            <button type="button" id="btn-discard-partial" title="${trE('panel.discardTitle')}">${trE('panel.discard')}</button>
+            <button class="btn btn--primary" type="button" id="btn-resume">${trE('panel.resume')}</button>
+            <button class="btn btn--ghost" type="button" id="btn-discard-partial" title="${trE('panel.discardTitle')}">${trE('panel.discard')}</button>
           </div>
         </div>
 
@@ -167,22 +180,7 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
           </div>
           <div class="advanced-pane" id="advanced-passes" hidden>
             <div class="passes" id="passes" role="group" aria-label="${trE('panel.choosePasses')}"></div>
-          </div>
-        </section>
-
-        <section class="section section--run" aria-labelledby="run-title">
-          <div class="run-card" id="run-card" data-state="idle">
-            <header class="run-card__head">
-              <h2 class="run-card__title" id="run-title">${trE('panel.runSection')}</h2>
-              <div class="run-card__chips" id="run-chips" aria-live="polite"></div>
-            </header>
-            <button class="btn btn--primary btn--lg run-card__btn" id="btn-start" type="button" aria-disabled="true" aria-label="${trE('panel.runSectionAria')}">
-              <span aria-hidden="true" class="run-card__btn-icon">▶</span>
-              <span class="run-card__btn-label">${trE('run.start')}</span>
-            </button>
-            <div class="run-card__msg" id="run-msg" role="status" aria-live="polite"></div>
-            <!-- legacy id kept for renderPasses(); never visible in this card. -->
-            <span id="passes-estimate" hidden></span>
+            <div class="adv-opts" id="advanced-options" aria-label="${trE('adv.sectionAria')}"></div>
           </div>
         </section>
 
@@ -191,13 +189,40 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
           <div class="timeline" id="timeline" aria-live="polite"></div>
         </section>
 
-        <section class="section" aria-labelledby="log-title">
-          <div class="log-header">
-            <h2 class="section-title" id="log-title">${trE('panel.log')} <span class="log-count" id="log-count"></span></h2>
-            <button class="btn btn--ghost btn--xs" id="btn-copy-log" type="button" aria-label="${trE('panel.copyLogAria')}">${trE('panel.copy')}</button>
-            <button class="btn btn--ghost btn--xs" id="btn-clear-log" type="button" aria-label="${trE('panel.clearLogAria')}">${trE('panel.clear')}</button>
+        <section class="section section--run" aria-labelledby="run-title">
+          <div class="run-card" id="run-card" data-state="idle">
+            <header class="run-card__head">
+              <h2 class="run-card__title" id="run-title">${trE('panel.runSection')}</h2>
+              <div class="run-card__chips" id="run-chips" aria-live="polite"></div>
+            </header>
+            <!-- Cost pill sits ABOVE the action button so the user sees the
+                 estimated cost before deciding to press RUN. -->
+            <button type="button" class="cost-pill" id="cost-pill" aria-haspopup="dialog" aria-label="${trE('cost.pillAria')}" hidden></button>
+            <button class="btn btn--primary btn--lg run-card__btn" id="btn-start" type="button" aria-disabled="true" aria-label="${trE('panel.runSectionAria')}">
+              <span aria-hidden="true" class="run-card__btn-icon">▶</span>
+              <span class="run-card__btn-label">${trE('run.start')}</span>
+            </button>
+            <div class="run-card__msg" id="run-msg" role="status" aria-live="polite"></div>
+            <!-- Log lives INSIDE the run card as a collapsed audit trail.
+                 It's the lowest-attention surface in the panel (rarely opened,
+                 high signal when it is), so embedding it here keeps it one
+                 click away without consuming vertical space by default. -->
+            <div class="run-card__log">
+              <div class="log-header">
+                <button type="button" class="log-toggle" id="btn-toggle-log" aria-expanded="false" aria-controls="log-pane" title="${trE('panel.logToggleHint')}">
+                  <span class="log-toggle__chev" aria-hidden="true">▸</span>
+                  <span class="log-toggle__label" id="log-title">${trE('panel.log')} <span class="log-count" id="log-count"></span></span>
+                </button>
+                <div class="log-header__actions" id="log-header-actions" hidden>
+                  <button class="btn btn--ghost btn--xs" id="btn-copy-log" type="button" aria-label="${trE('panel.copyLogAria')}">${trE('panel.copy')}</button>
+                  <button class="btn btn--ghost btn--xs" id="btn-clear-log" type="button" aria-label="${trE('panel.clearLogAria')}">${trE('panel.clear')}</button>
+                </div>
+              </div>
+              <div class="log-pane" id="log-pane" hidden>
+                <div class="live empty" id="live" role="log" aria-live="polite" aria-label="${trE('panel.reviewLog')}">${trE('panel.noActivity')}</div>
+              </div>
+            </div>
           </div>
-          <div class="live empty" id="live" role="log" aria-live="polite" aria-label="${trE('panel.reviewLog')}">${trE('panel.noActivity')}</div>
         </section>
 
       </div>
@@ -207,27 +232,44 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
     <div class="gutter" id="gutter" role="separator" aria-orientation="vertical" aria-label="${trE('panel.resize')}" tabindex="0" aria-valuemin="280" aria-valuemax="720" aria-valuenow="420"></div>
 
     <section class="right" aria-label="${trE('panel.reviewResults')}">
-      <div id="exec" class="exec" hidden>
-        <h2>${trE('panel.execSummary')}</h2>
-        <p id="exec-text"></p>
-      </div>
+      <section id="summary" class="summary" hidden aria-labelledby="summary-title">
+        <button type="button" class="summary__bar" id="summary-toggle" aria-expanded="true" aria-controls="summary-body">
+          <span class="summary__chev" aria-hidden="true">▶</span>
+          <span class="summary__verdict" id="summary-verdict-pill">
+            <span class="summary__verdict-icon" aria-hidden="true"></span>
+            <span class="summary__verdict-label" id="summary-verdict-label"></span>
+          </span>
+          <span class="summary__title" id="summary-title">${trE('panel.execSummary')}</span>
+          <span class="summary__meta" id="summary-meta" aria-live="polite"></span>
+          <span class="summary__sev-chips" id="summary-sev-chips" aria-label="${trE('panel.findingsBySeverity')}"></span>
+        </button>
+        <div class="summary__body" id="summary-body">
+          <p class="summary__lead" id="exec-text"></p>
+          <div class="summary__concerns" id="summary-concerns" hidden>
+            <h3 class="summary__h3">${trE('panel.topConcerns')} <span class="summary__count" id="concerns-count"></span></h3>
+            <ul id="concerns" class="summary__list summary__list--concerns"></ul>
+          </div>
+          <div class="summary__strengths" id="summary-strengths" hidden>
+            <h3 class="summary__h3 summary__h3--muted">${trE('panel.strengths')} <span class="summary__count" id="strengths-count"></span></h3>
+            <ul id="strengths" class="summary__list summary__list--strengths"></ul>
+          </div>
+        </div>
+      </section>
 
-      <div class="bullets" id="bullets" hidden>
-        <div class="card"><h3>${trE('panel.topConcerns')}</h3><ul id="concerns"></ul></div>
-        <div class="card"><h3>${trE('panel.strengths')}</h3><ul id="strengths"></ul></div>
-      </div>
-
-      <div class="filters-wrap">
+      <div class="filters-wrap" id="filters-wrap">
         <div class="filters" role="group" aria-label="${trE('panel.filterBySeverity')}">
-          <button class="filter" type="button" data-f="all" aria-pressed="true">${trE('panel.filterAll')}</button>
-          <button class="filter" type="button" data-f="critical" aria-pressed="false">${trE('panel.critical')}</button>
-          <button class="filter" type="button" data-f="major" aria-pressed="false">${trE('panel.major')}</button>
-          <button class="filter" type="button" data-f="minor" aria-pressed="false">${trE('panel.minor')}</button>
-          <button class="filter" type="button" data-f="nit" aria-pressed="false">${trE('panel.nit')}</button>
-          <button class="filter" type="button" data-f="praise" aria-pressed="false">${trE('panel.praise')}</button>
-          <button class="filter filter--silenced" type="button" data-f="silenced" aria-pressed="false" title="${trE('panel.silencedFilterTitle')}">${trE('panel.silenced')}</button>
-          <button class="filter filter--revised" type="button" data-f="revised" aria-pressed="false" title="${trE('panel.revisedFilterTitle')}">${trE('panel.revised')} <span class="filter__count" id="filter-revised-count" hidden>0</span></button>
+          <button class="filter" type="button" data-f="all" aria-pressed="true">${trE('panel.filterAll')} <span class="filter__count" data-count-for="all" hidden>0</span></button>
+          <button class="filter filter--sev" type="button" data-f="critical" data-sev="critical" aria-pressed="false">${trE('panel.critical')} <span class="filter__count" data-count-for="critical" hidden>0</span></button>
+          <button class="filter filter--sev" type="button" data-f="major" data-sev="major" aria-pressed="false">${trE('panel.major')} <span class="filter__count" data-count-for="major" hidden>0</span></button>
+          <button class="filter filter--sev" type="button" data-f="minor" data-sev="minor" aria-pressed="false">${trE('panel.minor')} <span class="filter__count" data-count-for="minor" hidden>0</span></button>
+          <button class="filter filter--sev" type="button" data-f="nit" data-sev="nit" aria-pressed="false">${trE('panel.nit')} <span class="filter__count" data-count-for="nit" hidden>0</span></button>
+          <button class="filter filter--sev" type="button" data-f="praise" data-sev="praise" aria-pressed="false">${trE('panel.praise')} <span class="filter__count" data-count-for="praise" hidden>0</span></button>
+          <button class="filter filter--silenced" type="button" data-f="silenced" aria-pressed="false" title="${trE('panel.silencedFilterTitle')}">${trE('panel.silenced')} <span class="filter__count" data-count-for="silenced" hidden>0</span></button>
+          <button class="filter filter--revised" type="button" data-f="revised" aria-pressed="false" title="${trE('panel.revisedFilterTitle')}">${trE('panel.revised')} <span class="filter__count" id="filter-revised-count" data-count-for="revised" hidden>0</span></button>
+        </div>
+        <div class="filters-search">
           <label class="sr-only" for="search">${trE('panel.filterByText')}</label>
+          <svg class="filters-search__icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M11.5 10.5h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 5L16.5 16l-5-5zm-6 0a5 5 0 1 1 5-5 5 5 0 0 1-5 5z"/></svg>
           <input class="search" id="search" type="search" placeholder="${trE('panel.findingsSearchPlaceholder')}" autocomplete="off" spellcheck="false" />
         </div>
         <div class="filters-cat" id="cat-filters" role="group" aria-label="${trE('panel.filterByCategory')}"></div>
@@ -237,7 +279,13 @@ export function renderBody(lang: Lang, tr: Tr, trE: TrE): string {
 
       <div id="findings" class="findings" role="region" aria-label="${trE('panel.findingsRegion')}"></div>
 
-      <div id="empty" class="empty-state">${tr('panel.emptyState')}</div>
+      <!-- Right-pane state surface. Renderer fills it with one of:
+             welcome panel (idle, no findings, no run)
+             in-progress "discoveries" view (running, no findings yet)
+             empty hint (filter mismatch / clean review)
+           When findings exist, this element stays hidden and the cards own
+           the surface. -->
+      <div id="right-state" class="right-state" hidden></div>
     </section>
   </main>
 

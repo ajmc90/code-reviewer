@@ -5,6 +5,8 @@ import { bootstrapState, hydrateForResume, computePlannedPasses } from './state'
 import { runRemainingPasses } from './phaseLoop';
 import { makeSummary } from './passes/summary';
 import { report } from './helpers';
+import { emitTelemetry, ReviewMetricsAccumulator } from './telemetry';
+import { emitDeveloperDiagnostics } from './devDiagnostics';
 
 export { ReviewPausedError } from './errors';
 export type { OrchestratorDeps } from './types';
@@ -15,6 +17,12 @@ export class ReviewOrchestrator {
   async review(opts: ReviewOptions): Promise<ReviewResult> {
     const start = Date.now();
     const { events } = this.deps;
+
+    // Aggregate metrics across all passes so we can emit one summary at end
+    // of run. Placed on deps so passRunner's emitTelemetry can fold into it
+    // without us threading a parameter through every pass-execution layer.
+    const metricsAccumulator = new ReviewMetricsAccumulator();
+    this.deps.metricsAccumulator = metricsAccumulator;
 
     const state: PartialReviewState = this.deps.resumeFrom
       ? hydrateForResume(this.deps, this.deps.resumeFrom)
@@ -48,8 +56,31 @@ export class ReviewOrchestrator {
     events?.emit({ kind: 'phaseStart', phase: 'critique', at: Date.now() });
     events?.emit({ kind: 'passStart', pass: 'summary', label: 'Final summary', at: Date.now() });
     const summaryStart = Date.now();
-    const summary = await makeSummary(this.deps, state.opts, state.ctx, state.stat, state.findings);
-    events?.emit({ kind: 'passDone', pass: 'summary', findingCount: 0, durationMs: Date.now() - summaryStart, at: Date.now() });
+    const { summary, metrics: summaryMetrics } = await makeSummary(this.deps, state.opts, state.ctx, state.stat, state.findings);
+    const summaryDurationMs = Date.now() - summaryStart;
+    events?.emit({
+      kind: 'passDone',
+      pass: 'summary',
+      findingCount: 0,
+      durationMs: summaryDurationMs,
+      usage: summaryMetrics?.usage,
+      toolsInvoked: summaryMetrics?.toolsInvoked,
+      apiRetries: summaryMetrics?.apiRetries,
+      at: Date.now(),
+    });
+    if (summaryMetrics) {
+      emitTelemetry(
+        this.deps,
+        {
+          pass: 'summary',
+          findingCount: 0,
+          passDurationMs: summaryDurationMs,
+          state,
+          metrics: summaryMetrics,
+        },
+        metricsAccumulator,
+      );
+    }
 
     const result: ReviewResult = {
       summary: {
@@ -71,6 +102,20 @@ export class ReviewOrchestrator {
       findingCount: state.findings.filter(isVisibleFinding).length,
       at: Date.now(),
     });
+
+    // Emit structured per-finding dump if developer diagnostics enabled.
+    // Comes after the 'done' event so it never blocks user-visible completion.
+    emitDeveloperDiagnostics(this.deps, state);
+
+    // Hand the aggregated metrics to whoever wants to record them (estimator's
+    // sample store). Callback is optional; we no-op if the host didn't wire it.
+    if (this.deps.onReviewMetrics) {
+      const visibleCount = state.findings.filter(isVisibleFinding).length;
+      this.deps.onReviewMetrics(
+        metricsAccumulator.finalize(visibleCount, state.enrichedDiff.length, result.durationMs),
+      );
+    }
+
     return result;
   }
 }

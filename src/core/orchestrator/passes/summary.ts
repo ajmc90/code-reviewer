@@ -4,6 +4,7 @@ import { parseClaudeOutput } from '../../../claude/parser';
 import { OrchestratorDeps } from '../types';
 import { runCli } from '../cli';
 import { stripIdForPrompt } from '../helpers';
+import { PassMetrics, metricsFromCliResult } from '../metrics';
 
 function fallbackSummary(findings: Finding[]): ReviewSummary {
   const visible = findings.filter(isVisibleFinding);
@@ -31,7 +32,7 @@ export async function makeSummary(
   ctx: ProjectContext,
   stat: { filesChanged: number; insertions: number; deletions: number },
   findings: Finding[],
-): Promise<ReviewSummary> {
+): Promise<{ summary: ReviewSummary; metrics?: PassMetrics }> {
   // The summary prompt should only see findings that will actually reach the
   // author — feeding critique-dropped/merged ones in just produces a stale
   // executive summary that contradicts the grid the user sees.
@@ -44,11 +45,15 @@ export async function makeSummary(
     lang: opts.lang,
   });
   try {
-    const text = await runCli(deps, prompt, 'summary');
-    const parsed = parseClaudeOutput(text, opts.lang);
-    if (parsed.summary) return parsed.summary;
+    const r = await runCli(deps, prompt, 'summary');
+    const metrics = metricsFromCliResult(r, prompt.length);
+    const parsed = parseClaudeOutput(r.text, opts.lang);
+    if (parsed.summary) return { summary: parsed.summary, metrics };
+    // Parser returned nothing — keep the metrics (the CLI call still cost us)
+    // but use the local fallback summary.
+    return { summary: fallbackSummary(findings), metrics };
   } catch (e) {
     deps.log(`Summary pass failed, using fallback: ${(e as Error).message}`);
   }
-  return fallbackSummary(findings);
+  return { summary: fallbackSummary(findings) };
 }

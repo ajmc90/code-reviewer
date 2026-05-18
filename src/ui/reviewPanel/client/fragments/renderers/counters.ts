@@ -17,7 +17,9 @@ export const COUNTERS = `
       if (f.decision === 'drop' || f.decision === 'merge') continue;
       if (counts[f.severity] != null) counts[f.severity]++;
     }
+    let total = 0;
     for (const k of Object.keys(counts)){
+      total += counts[k];
       const el = $('#c-'+k);
       if (el){
         el.textContent = counts[k];
@@ -25,6 +27,10 @@ export const COUNTERS = `
         if (parent) parent.setAttribute('data-active', counts[k] > 0 ? '1' : '0');
       }
     }
+    // Dim the whole strip when nothing has been found yet — six "0" pills
+    // in the header are pure noise until a review has produced numbers.
+    const strip = document.querySelector('.counters');
+    if (strip) strip.setAttribute('data-empty', total === 0 ? '1' : '0');
     // Re-render the category chip strip too — keeping it on bumpCounter means
     // the chip counts track live findings the same way as the severity dots,
     // fixing the "chips lag behind during critique" inconsistency where the

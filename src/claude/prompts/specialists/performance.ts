@@ -1,7 +1,7 @@
 import { ChangeMapEntry, DiffFile, FindingIndexEntry, ProjectContext, ReasoningDepth } from '../../../types';
 import { Lang } from '../../../i18n';
 import { buildSystemPreamble } from '../system';
-import { JSON_CONTRACT, antiDuplicationBlock, changeMapBlock } from '../shared';
+import { JSON_CONTRACT_FINDINGS_ONLY, antiDuplicationBlock, changeMapBlock } from '../shared';
 
 export function buildPerformancePrompt(args: {
   ctx: ProjectContext;
@@ -22,7 +22,7 @@ export function buildPerformancePrompt(args: {
     '--- DIFF ---',
     args.diff,
     '',
-    JSON_CONTRACT,
+    JSON_CONTRACT_FINDINGS_ONLY,
   ]
     .filter(Boolean)
     .join('\n');

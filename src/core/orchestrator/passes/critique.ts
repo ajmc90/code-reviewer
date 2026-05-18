@@ -5,6 +5,7 @@ import { stripIdForPrompt } from '../helpers';
 import { runCli } from '../cli';
 import { parseCritiqueOutput, normalizeCritiqueFinding } from '../../../claude/critiqueParser';
 import { PassName } from '../../events';
+import { PassMetrics, metricsFromCliResult } from '../metrics';
 
 /**
  * Critique result: the full updated finding set, ready to replace state.findings.
@@ -19,6 +20,7 @@ import { PassName } from '../../events';
 export interface CritiqueResult {
   findings: Finding[];
   counts: { kept: number; revised: number; dropped: number; merged: number; newFindings: number };
+  metrics: PassMetrics;
 }
 
 /**
@@ -56,14 +58,15 @@ export async function runCritiquePass(
     lang,
   });
   log(`[${passKey}] prompt = ${prompt.length} chars (${Math.round(prompt.length / 1024)} KB)`);
-  const text = await runCli(deps, prompt, passKey);
-  log(`[${passKey}] response = ${text.length} chars (${Math.round(text.length / 1024)} KB)`);
+  const r = await runCli(deps, prompt, passKey);
+  log(`[${passKey}] response = ${r.text.length} chars (${Math.round(r.text.length / 1024)} KB)`);
+  const metrics = metricsFromCliResult(r, prompt.length);
 
   // ── 3. Parse ────────────────────────────────────────────────────
-  const parsed = parseCritiqueOutput(text);
-  if (parsed.decisions.length === 0 && parsed.newFindings.length === 0 && text.length > 0) {
-    const preview = text.trim().slice(0, 600).replace(/\s+/g, ' ');
-    log(`[${passKey}] parsed 0 decisions and 0 new findings. Response preview: ${preview}${text.length > 600 ? '…' : ''}`);
+  const parsed = parseCritiqueOutput(r.text);
+  if (parsed.decisions.length === 0 && parsed.newFindings.length === 0 && r.text.length > 0) {
+    const preview = r.text.trim().slice(0, 600).replace(/\s+/g, ' ');
+    log(`[${passKey}] parsed 0 decisions and 0 new findings. Response preview: ${preview}${r.text.length > 600 ? '…' : ''}`);
     events?.emit({
       kind: 'log',
       level: 'warn',
@@ -75,6 +78,7 @@ export async function runCritiquePass(
     return {
       findings: state.findings.slice(),
       counts: { kept: state.findings.length, revised: 0, dropped: 0, merged: 0, newFindings: 0 },
+      metrics,
     };
   }
 
@@ -188,7 +192,7 @@ export async function runCritiquePass(
   // ── 7. Append new findings ──────────────────────────────────────
   updated.push(...newFindings);
 
-  return { findings: updated, counts };
+  return { findings: updated, counts, metrics };
 }
 
 function makeRealId(seed: number): string {

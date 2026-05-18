@@ -147,7 +147,7 @@ export function parseClaudeOutput(
       filesChanged: 0,
       linesAdded: 0,
       linesRemoved: 0,
-      overallVerdict: (raw.summary.overallVerdict as any) ?? 'approve-with-comments',
+      overallVerdict: normalizeVerdict(raw.summary.overallVerdict),
       executiveSummary: raw.summary.executiveSummary ?? '',
       topConcerns: Array.isArray(raw.summary.topConcerns) ? raw.summary.topConcerns : [],
       strengths: Array.isArray(raw.summary.strengths) ? raw.summary.strengths : [],
@@ -173,6 +173,42 @@ function normalizeChangeMapEntry(e: any): ChangeMapEntry | null {
   const blastRadius: BlastRadius = VALID_BLAST_RADIUS.includes(e.blastRadius) ? e.blastRadius : 'local';
   const note = typeof e.note === 'string' && e.note.trim() ? String(e.note).slice(0, 200) : undefined;
   return { file: e.file, kind, blastRadius, note };
+}
+
+const VALID_VERDICTS: ReviewSummary['overallVerdict'][] = [
+  'block',
+  'needs-changes',
+  'approve-with-comments',
+  'approve',
+  'praise',
+];
+
+/**
+ * Coerce whatever the LLM put in overallVerdict into one of the enum values
+ * the rest of the system expects. Without this, models occasionally write
+ * the verdict as a full sentence ("DO NOT MERGE. THIS BRANCH IS...") and the
+ * UI ends up rendering that giant string as a verdict badge — overflowing
+ * the card and breaking the layout of the sidebar summary view.
+ *
+ * Heuristic: exact-match preferred; if not, infer from keywords; default
+ * conservative to 'needs-changes' for unknown content (better than the
+ * previous 'approve-with-comments' default — if the model produced
+ * gibberish we don't want to mislead the user toward approval).
+ */
+export function normalizeVerdict(raw: unknown): ReviewSummary['overallVerdict'] {
+  if (typeof raw !== 'string') return 'approve-with-comments';
+  const lowered = raw.toLowerCase().trim();
+  if ((VALID_VERDICTS as string[]).includes(lowered)) {
+    return lowered as ReviewSummary['overallVerdict'];
+  }
+  // Keyword-based inference for the common "model wrote a sentence" case.
+  // Order matters: check 'do not merge' / 'block' before 'merge', etc.
+  if (/\b(do not merge|do\s*n.?t merge|block|reject)\b/.test(lowered)) return 'block';
+  if (/\b(needs changes|request changes|request[-_]changes|changes required)\b/.test(lowered)) return 'needs-changes';
+  if (/\b(approve with comments|approve[-_]with[-_]comments|approved? with)\b/.test(lowered)) return 'approve-with-comments';
+  if (/\b(approve|approved|lgtm|ship it)\b/.test(lowered)) return 'approve';
+  if (/\b(praise|excellent|outstanding)\b/.test(lowered)) return 'praise';
+  return 'needs-changes';
 }
 
 const VALID_SEVERITY: Severity[] = ['critical', 'major', 'minor', 'nit', 'praise'];
@@ -218,17 +254,50 @@ function normalizeFinding(f: any, idx: number, lang: Lang): Finding | null {
     confidence: ['high', 'medium', 'low'].includes(f.confidence) ? f.confidence : 'medium',
     pass: 'explore',
     originalLang: lang,
-    suggestedFix: f.suggestedFix
-      ? {
-          description: String(f.suggestedFix.description ?? ''),
-          replacement: String(f.suggestedFix.replacement ?? ''),
-          range: { startLine, endLine },
-          confidence: ['high', 'medium', 'low'].includes(f.suggestedFix.confidence)
-            ? f.suggestedFix.confidence
-            : 'medium',
-        }
-      : undefined,
+    suggestedFix: f.suggestedFix ? parseSuggestedFix(f.suggestedFix, { startLine, endLine }) : undefined,
   };
+}
+
+/**
+ * Parse a model-emitted suggestedFix into the typed SuggestedFix. Accepts both
+ * the current schema (oldString/newString + optional context lines) and the
+ * legacy schema (just replacement). Records from history may carry either
+ * shape, so we preserve whichever fields are present and let the applier
+ * pick its strategy at apply-time.
+ *
+ * String coercion: when the model emits null/undefined we normalize to ''
+ * for prose fields, but oldString/newString/contextBefore/contextAfter only
+ * exist on the result when the model actually provided them — an empty
+ * oldString would silently match the start of every file, so absent is
+ * meaningfully different from empty here.
+ */
+function parseSuggestedFix(
+  raw: any,
+  range: { startLine: number; endLine: number },
+): import('../types').SuggestedFix {
+  const fix: import('../types').SuggestedFix = {
+    description: String(raw.description ?? ''),
+    range,
+    confidence: ['high', 'medium', 'low'].includes(raw.confidence) ? raw.confidence : 'medium',
+  };
+  if (typeof raw.oldString === 'string' && raw.oldString.length > 0) {
+    fix.oldString = raw.oldString;
+  }
+  if (typeof raw.newString === 'string') {
+    fix.newString = raw.newString;
+  }
+  if (typeof raw.contextBefore === 'string' && raw.contextBefore.length > 0) {
+    fix.contextBefore = raw.contextBefore;
+  }
+  if (typeof raw.contextAfter === 'string' && raw.contextAfter.length > 0) {
+    fix.contextAfter = raw.contextAfter;
+  }
+  // Legacy fallback path — older history records and any model still emitting
+  // the old schema. Kept so historical findings still apply.
+  if (typeof raw.replacement === 'string') {
+    fix.replacement = raw.replacement;
+  }
+  return fix;
 }
 
 function arr(v: any): string[] {

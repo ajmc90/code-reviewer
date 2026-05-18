@@ -4,18 +4,38 @@
 export const TIMELINE_CSS = String.raw`
 /* ─────────────────────────────────────────────────────────────────
  * Timeline (live activity)
+ *
+ * Each step is its own card — bordered, padded, with a clear header
+ * (icon + label + elapsed). Earlier design rendered steps as flat rows
+ * which made a long list (8+ passes with metrics + tools) read as one
+ * dense block. Cards give the eye a per-pass anchor.
  * ────────────────────────────────────────────────────────────── */
-.timeline{ display:flex; flex-direction:column; gap:var(--s-1) }
-.timeline-empty{ color: var(--fg-subtle); font-size: var(--t-xs); padding: var(--s-1) }
+.timeline{ display:flex; flex-direction:column; gap:var(--s-2) }
+.timeline-empty{
+  color: var(--fg-subtle);
+  font-size: var(--t-xs);
+  padding: var(--s-3);
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--fg) 2%, transparent);
+}
 .step{
   display:flex; gap:var(--s-3); align-items:flex-start;
-  padding: var(--s-2) var(--s-3);
+  padding: var(--s-3);
   border-radius: var(--r-md);
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
+  background: var(--bg);
   min-width: 0;
-  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
-.step--auto-skipped{ opacity: .7 }
+.step:hover{
+  border-color: color-mix(in srgb, var(--fg) 18%, var(--border));
+}
+.step--auto-skipped{ opacity: .65 }
 .step--consolidation .ico{ color: var(--accent) }
 .step-badge{
   position: relative;
@@ -77,7 +97,11 @@ export const TIMELINE_CSS = String.raw`
   color: var(--fg);
   flex-shrink: 0;
 }
-.step.running{ border-color: color-mix(in srgb, var(--accent) 40%, transparent); background: var(--accent-tint) }
+.step.running{
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent) inset;
+}
 .step.running .ico{ background: var(--accent); color: var(--accent-fg); padding: 0 }
 
 /* Inline SVG spinner — replaces the rotating ◐ character. Two animations
@@ -165,48 +189,117 @@ export const TIMELINE_CSS = String.raw`
 
 .resume-banner{
   display: none;
-  margin: 0 0 var(--s-2);
+  margin: 0 0 var(--s-3);
   padding: var(--s-3);
-  background: color-mix(in srgb, var(--sev-major) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--sev-major) 35%, transparent);
+  background: color-mix(in srgb, var(--sev-major) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sev-major) 30%, transparent);
   border-radius: var(--r-md);
   gap: var(--s-3);
   align-items: flex-start;
 }
 .resume-banner[data-visible="1"]{ display: flex }
-.resume-banner .text{ flex:1 1 auto; min-width:0 }
-.resume-banner .text h3{ margin: 0 0 4px; font-size: var(--t-sm); color: var(--fg); font-weight: 600 }
+.resume-banner .text{
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Reserve room for the actions on the right at any reasonable panel width.
+   * Without this the long branch-name detail line can shove the actions off
+   * the right edge or overlap them (which is what produced the screenshot's
+   * broken layout). */
+  padding-right: var(--s-2);
+}
+.resume-banner .text h3{ margin: 0 0 4px; font-size: var(--t-sm); color: var(--fg); font-weight: 600; line-height: 1.35 }
 .resume-banner .text p{ margin: 0; color: var(--fg-muted); font-size: var(--t-xs); overflow-wrap: anywhere; line-height: var(--lh-normal) }
-.resume-banner .actions{ display: flex; gap: var(--s-2); flex-shrink: 0 }
+.resume-banner .actions{
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  flex: 0 0 auto;
+  align-items: stretch;
+  min-width: 92px;
+}
+.resume-banner .actions .btn{ justify-content: center }
 .resume-banner .ico{
   font-size: 18px; line-height: 1; padding-top: 1px; color: var(--sev-major);
+  flex: 0 0 auto;
 }
 
-.step .body{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:2px }
+/* On wider panels prefer side-by-side action buttons; stack only when narrow. */
+@media (min-width: 520px){
+  .resume-banner .actions{ flex-direction: row; min-width: 0 }
+}
+
+.step .body{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap: 4px }
 .step .label{
-  display:flex; align-items:baseline; gap:var(--s-2);
+  display:flex; align-items:center; gap:var(--s-2);
   font-size: var(--t-sm);
   font-weight: 600;
   color: var(--fg);
+  line-height: 1.3;
 }
 .step.running .label{ color: var(--accent) }
 .step .elapsed{
   margin-left:auto;
+  flex-shrink: 0;
   font-size: 10px;
-  font-weight: 400;
-  color: var(--fg-muted);
+  font-weight: 500;
+  color: var(--fg-subtle);
   font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.step.running .elapsed{
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
 }
 .step .meta{
   font-size: var(--t-xs);
   color: var(--fg-muted);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
-.step .activity{
-  font-size: 10px;
-  font-family: var(--vscode-editor-font-family);
-  color: var(--fg-subtle);
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+/* Metric-chip row shown under a completed pass. Wraps onto multiple rows on
+ * narrow panels instead of overflowing. Sits inside the card with a thin
+ * top divider so it reads as "metrics for this pass" rather than as another
+ * row in the timeline. */
+.step .chips{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
 }
+.step .chip{
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 2px 8px;
+  font-size: 10px;
+  line-height: 16px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.step .chip__k{
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 9px;
+  font-weight: 600;
+}
+.step .chip__v{
+  color: var(--fg);
+  font-weight: 600;
+}
+/* Per-kind accents — saturate sparingly so chips don't compete with the
+ * pass label. cache hit gets a success tint when high, findings get a
+ * subtle severity hint (it's the user's headline number). */
+.step .chip--tokens .chip__v{ color: var(--fg) }
+.step .chip--cache .chip__v{ color: var(--sev-nit) }
+.step .chip--findings{
+  background: color-mix(in srgb, var(--sev-major) 10%, transparent);
+  border-color: color-mix(in srgb, var(--sev-major) 35%, var(--border));
+}
+.step .chip--findings .chip__v{ color: var(--sev-major) }
 
 `;

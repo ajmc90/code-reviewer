@@ -30,4 +30,19 @@ export const LIVE_LOG = `
     liveLineCount = 0;
     $('#log-count').textContent = '';
   }
+  function applyLogOpen(){
+    const pane = $('#log-pane');
+    const btn = $('#btn-toggle-log');
+    const actions = $('#log-header-actions');
+    if (!pane || !btn) return;
+    const open = !!state.logOpen;
+    pane.hidden = !open;
+    if (actions) actions.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.setAttribute('aria-label', tMsg(open ? 'panel.logHide' : 'panel.logShow'));
+    if (open){
+      const live = $('#live');
+      if (live) live.scrollTop = live.scrollHeight;
+    }
+  }
 `;

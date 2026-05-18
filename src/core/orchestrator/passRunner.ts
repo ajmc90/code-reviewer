@@ -4,6 +4,13 @@ import { OrchestratorDeps } from './types';
 import { dedupeFindings, linkRelatedFindings } from '../../claude/parser';
 import { ReviewPausedError } from './errors';
 import { report, checkCancel } from './helpers';
+import { PassMetrics } from './metrics';
+import { emitTelemetry, ReviewMetricsAccumulator } from './telemetry';
+
+export interface PlannedPassResult {
+  findings: Finding[];
+  metrics: PassMetrics;
+}
 
 export interface PlannedPass {
   pass: PassName;
@@ -14,8 +21,8 @@ export interface PlannedPass {
   /** Optional runtime check; if it returns a non-null string the pass is skipped with that reason. */
   conditionalSkip?: (state: PartialReviewState) => string | null;
   replaceAll?: boolean;
-  /** Returns the findings for this pass (or [] if none). May throw on CLI failure. */
-  run: () => Promise<Finding[]>;
+  /** Returns the findings for this pass plus telemetry from the CLI call. May throw on CLI failure. */
+  run: () => Promise<PlannedPassResult>;
 }
 
 export function shouldRun(deps: OrchestratorDeps, pass: PassName, state: PartialReviewState): boolean {
@@ -29,15 +36,21 @@ export function shouldRun(deps: OrchestratorDeps, pass: PassName, state: Partial
  * Run one pass with retry/skip/stop semantics. On stop, throws ReviewPausedError
  * so the host can persist the partial state and offer a Resume affordance.
  * The `run` callback does the work and is responsible for mutating `state`;
- * it returns the number of findings for the passDone event.
+ * it returns the number of findings and (optionally) per-pass telemetry that
+ * the passDone event and the structured telemetry log surface.
  */
+export interface PassRunResult {
+  findingCount: number;
+  metrics?: PassMetrics;
+}
+
 export async function executePassWithDecisions(
   deps: OrchestratorDeps,
   pass: PassName,
   label: string,
   increment: number,
   state: PartialReviewState,
-  run: () => Promise<number>,
+  run: () => Promise<PassRunResult>,
 ): Promise<void> {
   const { events, token, progress, log } = deps;
   // eslint-disable-next-line no-constant-condition
@@ -47,10 +60,33 @@ export async function executePassWithDecisions(
     events?.emit({ kind: 'passStart', pass, label, at: Date.now() });
     const passStart = Date.now();
     try {
-      const findingCount = await run();
+      const { findingCount, metrics } = await run();
       state.completedPasses.push(pass);
       deps.onStateSnapshot?.(state);
-      events?.emit({ kind: 'passDone', pass, findingCount, durationMs: Date.now() - passStart, at: Date.now() });
+      const durationMs = Date.now() - passStart;
+      events?.emit({
+        kind: 'passDone',
+        pass,
+        findingCount,
+        durationMs,
+        usage: metrics?.usage,
+        toolsInvoked: metrics?.toolsInvoked,
+        apiRetries: metrics?.apiRetries,
+        at: Date.now(),
+      });
+      if (metrics) {
+        emitTelemetry(
+          deps,
+          {
+            pass,
+            findingCount,
+            passDurationMs: durationMs,
+            state,
+            metrics,
+          },
+          deps.metricsAccumulator as ReviewMetricsAccumulator | undefined,
+        );
+      }
       return;
     } catch (e: any) {
       if (token?.isCancellationRequested) throw e;
@@ -113,7 +149,7 @@ export async function runPlannedPass(
   }
 
   await executePassWithDecisions(deps, step.pass, step.label, step.increment, state, async () => {
-    const rawFindings = await step.run();
+    const { findings: rawFindings, metrics } = await step.run();
     // Dedupe within this pass's own output before doing anything else. Claude
     // sometimes returns the same finding twice in a single response (slightly
     // different wording, same file+range+category); without this step those
@@ -136,6 +172,6 @@ export async function runPlannedPass(
     for (const f of findings) {
       deps.events?.emit({ kind: 'findingAdded', finding: f, replaceAll, at: Date.now() });
     }
-    return findings.length;
+    return { findingCount: findings.length, metrics };
   });
 }

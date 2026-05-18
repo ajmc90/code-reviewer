@@ -32,11 +32,39 @@ export interface CodeRange {
   endColumn?: number;
 }
 
+/**
+ * Suggested fix payload. The canonical apply path is search/replace via
+ * oldString/newString — robust against line-number drift between the model's
+ * mental snapshot and the on-disk file. range stays for visual highlight (the
+ * decoration on the editor + the location shown on the card). replacement is
+ * kept as a legacy fallback so fixes from older review history (before the
+ * search/replace schema landed) still apply via line-range substitution.
+ */
 export interface SuggestedFix {
   description: string;
-  replacement: string;
   range: CodeRange;
   confidence: 'high' | 'medium' | 'low';
+  /**
+   * New schema: exact substring of the current file to replace. The applier
+   * runs a 4-strategy cascade (exact / whitespace-insensitive / indent-
+   * preserving / fuzzy) and refuses to write when there's no match or
+   * multiple ambiguous matches.
+   */
+  oldString?: string;
+  newString?: string;
+  /**
+   * Optional 1-3 lines of surrounding context the model can attach to
+   * disambiguate when oldString happens to appear more than once in the file.
+   * Only consulted by the applier when the initial search returns >1 match.
+   */
+  contextBefore?: string;
+  contextAfter?: string;
+  /**
+   * Legacy field. Some history records pre-date the search/replace schema and
+   * only carry a line-range + replacement. The applier falls back to a pure
+   * line-range substitution when oldString is absent.
+   */
+  replacement?: string;
 }
 
 /**
@@ -51,7 +79,11 @@ export interface TranslatedFindingFields {
   questionsRaised: string[];
   alternativesConsidered: string[];
   evidence: string[];
-  suggestedFix?: { description: string; replacement: string };
+  /**
+   * Only the prose description gets translated — oldString/newString/
+   * replacement carry code which stays verbatim across languages.
+   */
+  suggestedFix?: { description: string };
   /**
    * Self-critique's verdict prose for this finding, when present. Translated
    * alongside the main fields so the "Self-critique's review" section in the

@@ -33,17 +33,14 @@ export const STATE = `
     selectedBase: null, selectedHead: null,
     showLocal: true, showRemote: true, branchSearch: '', fetching: false,
     abReqId: '', abResult: null,
-    // Preflight diff size for the currently selected base/head, used to scale
-    // the runtime estimate. null while in-flight or unknown; the request is
-    // deduped by reqId.
-    diffStatReqId: '', diffStat: null,
-    // Per-pass median ms-per-line ratios learned from prior runs. Updated by
-    // the host on 'ready'. Empty ratios → fall back to hardcoded costSec.
-    calibration: { ratios: {} },
     isRunning: false,
     passes: Object.assign({}, defaultPasses, persisted.passes || {}),
     leftCollapsed: !!persisted.leftCollapsed,
     leftWidth: clampLeftWidth(persisted.leftWidth) || 420,
+    // Stacked-layout (mobile) height of the left pane, in px. 0 = auto
+    // (content-driven). Set the first time the user drags the horizontal
+    // gutter; persists across sessions.
+    leftHeight: Number(persisted.leftHeight) || 0,
     runningPass: null,
     // Most recent partial-state summary from the host. null = no paused review.
     partial: null,
@@ -64,12 +61,37 @@ export const STATE = `
     // preset row + read-only "active passes" chips are visible. Persisted so
     // power users don't have to re-open it every session.
     advancedOpen: !!persisted.advancedOpen,
+    // Live log panel toggle. Collapsed by default to keep the left pane tidy;
+    // persisted so users who keep it open don't have to re-expand each session.
+    logOpen: !!persisted.logOpen,
+    // Review summary panel collapse. Default expanded so a fresh review shows
+    // the verdict + concerns immediately; once the user collapses it, the
+    // preference sticks across sessions (verdict pill + sev chips remain
+    // visible in the bar even when collapsed).
+    summaryCollapsed: !!persisted.summaryCollapsed,
     // Wall-clock time when the current run started (for the Run card elapsed).
     // null when idle / done.
     runStartedAt: null,
     // Most recent phase the orchestrator entered. Drives the "Phase X/N · label"
     // line on the running Run card.
     currentPhase: null,
+    // Pre-run cost estimate. Populated by the 'estimate' message from the
+    // host whenever branches/passes/depth change. null = no estimate yet (no
+    // branches selected, or compute failed). estimateLoading = request in
+    // flight (covers the chip with a spinner so the user knows we're working).
+    estimate: null,
+    estimateLoading: false,
+    // Review config that the estimator needs and the Advanced Options panel
+    // toggles. Initial defaults match the controller's reading of the same
+    // settings; once the host pushes 'settings' on ready, these get replaced
+    // with the real values from settings.json.
+    depth: 'deep',
+    useSessionReuse: true,
+    developerDiagnostics: false,
+    // Watchdog handle for the Stop button. When the user clicks Stop we set
+    // this; it fires after 12s if no cancelled/done/paused event arrived,
+    // and force-resets the running state. Cleared by every terminal event.
+    stopWatchdog: null,
   };
 
   function persist(){
@@ -78,8 +100,11 @@ export const STATE = `
       passes: state.passes,
       leftCollapsed: state.leftCollapsed,
       leftWidth: state.leftWidth,
+      leftHeight: state.leftHeight,
       changeMapCollapsed: state.changeMapCollapsed,
       advancedOpen: state.advancedOpen,
+      logOpen: state.logOpen,
+      summaryCollapsed: state.summaryCollapsed,
     });
   }
 `;

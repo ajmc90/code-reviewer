@@ -6,9 +6,8 @@
  *   ready    → user can press Start, chips show preview info
  *   running  → button becomes Stop, chips switch to live progress
  *
- * Reads heavily from state (passes, selectedBase/Head, isRunning, diffStat,
- * calibration, findings, runStartedAt, currentPhase) and from the estimator
- * (formatEstimateRange, estimateSource).
+ * Reads heavily from state (passes, selectedBase/Head, isRunning, findings,
+ * runStartedAt, currentPhase).
  */
 export const RUN_CARD = `
   function renderRunCard(){
@@ -81,7 +80,7 @@ export const RUN_CARD = `
     else msgEl.removeAttribute('data-tone');
   }
 
-  /** Idle/ready chips: branches · passes · estimated time. */
+  /** Idle/ready chips: branches · passes. */
   function buildIdleChips({ hasBase, hasHead, sameBranch, passActive }){
     const chips = [];
 
@@ -122,38 +121,6 @@ export const RUN_CARD = `
       );
     }
 
-    // Estimated-time chip — reuses formatEstimate() but extracts the range only.
-    if (passActive){
-      const est = formatEstimateRange();
-      if (est){
-        const ariaLabel = tMsg('run.chipTimeAria', { range: est });
-        const source = estimateSource();
-        // Build a tooltip that explains what the estimate is based on: the
-        // diff size we sized against, and how confident we are (calibrated
-        // from prior runs vs. default ranges).
-        const ds = state.diffStat;
-        const diffLabel = ds
-          ? tMsg('estimate.basedOnDiff', { adds: ds.additions || 0, dels: ds.deletions || 0, files: ds.filesChanged || 0 })
-          : tMsg('estimate.basedOnDefault');
-        const sourceLabel = source === 'calibrated'
-          ? tMsg('estimate.sourceCalibrated')
-          : source === 'mixed'
-            ? tMsg('estimate.sourceMixed')
-            : tMsg('estimate.sourceDefault');
-        chips.push(
-          '<span class="run-chip run-chip--has-tip" data-tone="time" data-source="'+escAttr(source)+'" tabindex="0" aria-label="'+escAttr(ariaLabel)+'">' +
-            '<span class="run-chip__icon" aria-hidden="true">◷</span>' +
-            '<span class="run-chip__val">'+esc(tMsg('run.chipTime', { range: est }))+'</span>' +
-            '<span class="run-chip__tag">'+esc(sourceLabel)+'</span>' +
-            '<span class="run-chip__tip" role="tooltip">' +
-              '<span class="run-chip__tip-title">'+esc(tMsg('estimate.tipTitle'))+'</span>' +
-              '<span class="run-chip__tip-hint">'+esc(diffLabel)+'</span>' +
-              '<span class="run-chip__tip-detail">'+esc(tMsg('estimate.tipDetail.' + source))+'</span>' +
-            '</span>' +
-          '</span>'
-        );
-      }
-    }
     return chips.join('');
   }
 

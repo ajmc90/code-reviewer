@@ -56,18 +56,61 @@ export const TIMELINE = `
       const end = info.endedAt || now;
       elapsed = fmtElapsed(end - info.startedAt);
     }
-    const activity = info.lastActivity
-      ? '<div class="activity" title="'+escAttr(info.lastActivity)+'">'+esc(info.lastActivity)+'</div>'
-      : '';
+    // Metric chips replace the dense single-line summary once the pass has
+    // finished. Built from info.metrics (parsed from the telemetry line) and
+    // info.findingCount / info.durationMs (carried over from passDone).
+    const chipsHtml = renderMetricChips(info);
+    // The free-form "activity" line under the metric meta was previously a
+    // 120-char slice of the raw stream chunk — that's where the Security row's
+    // mid-JSON fragment came from. Drop it entirely; everything meaningful now
+    // lives in info.detail (one line) and chipsHtml (structured chips).
+    const metaText = info.detail || (info.status==='running' ? tMsg('timeline.working') : '');
+    const meta = metaText ? '<div class="meta" title="'+escAttr(metaText)+'">'+esc(metaText)+'</div>' : '';
     const actions = renderStepActions(pass, info);
     const body =
       '<div class="body">' +
         '<div class="label"><span>'+esc(label)+'</span>'+skipBadge+'<span class="elapsed">'+esc(elapsed)+'</span></div>' +
-        '<div class="meta">'+esc(info.detail || (info.status==='running' ? tMsg('timeline.working') : ''))+'</div>' +
-        activity +
+        meta +
+        chipsHtml +
         actions +
       '</div>';
     return { icoHtml: iconForStatus(info.status), bodyHtml: body };
+  }
+
+  /**
+   * Render the metric-chip row shown under a finished pass. Each chip is a
+   * compact label · value pair (e.g. "Cost · $0.49"). Chips for missing values
+   * are omitted so a zero-tools pass doesn't show "Tools · 0".
+   */
+  function renderMetricChips(info){
+    if (info.status !== 'done') return '';
+    const m = info.metrics || {};
+    // Prefer telemetry-line values for cost/tokens/cache; fall back to the
+    // passDone event for finding count and wall-clock seconds so the chips
+    // still render even if a telemetry summary never arrived.
+    const findings = typeof info.findingCount === 'number' ? info.findingCount : null;
+    const seconds = typeof m.seconds === 'number' ? m.seconds
+      : typeof info.durationMs === 'number' ? info.durationMs/1000 : null;
+    const chips = [];
+    // Tokens replace the USD chip — billing varies per user (subscription vs
+    // API), tokens are the universal unit and tell the same story.
+    if (typeof m.inTokens === 'number' || typeof m.outTokens === 'number'){
+      const inT = m.inTokens || 0, outT = m.outTokens || 0;
+      chips.push({ label: tMsg('timeline.chip.tokens'), value: fmtCount(inT)+' / '+fmtCount(outT), kind: 'tokens' });
+    }
+    if (typeof m.cachePct === 'number') chips.push({ label: tMsg('timeline.chip.cache'), value: m.cachePct+'%', kind: 'cache' });
+    if (seconds != null) chips.push({ label: tMsg('timeline.chip.time'), value: (seconds < 10 ? seconds.toFixed(1) : Math.round(seconds))+'s', kind: 'time' });
+    if (findings != null && findings > 0) chips.push({ label: tMsg('timeline.chip.findings'), value: String(findings), kind: 'findings' });
+    if (typeof m.toolsUsed === 'number' && m.toolsUsed > 0) chips.push({ label: tMsg('timeline.chip.tools'), value: String(m.toolsUsed), kind: 'tools' });
+    if (chips.length === 0) return '';
+    return '<div class="chips" role="list">' +
+      chips.map(c =>
+        '<span class="chip chip--'+c.kind+'" role="listitem">' +
+          '<span class="chip__k">'+esc(c.label)+'</span>' +
+          '<span class="chip__v">'+esc(c.value)+'</span>' +
+        '</span>'
+      ).join('') +
+    '</div>';
   }
 
   function buildStepNode(pass, info, now){

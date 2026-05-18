@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ChangeMapEntry, ReviewPhase } from '../../types';
+import { CliUsage, CliToolInvocation } from '../../claude/cliClient';
 
 export type PassName = 'context' | 'diff' | 'structural' | 'explore' | 'security' | 'performance' | 'accessibility' | 'tests' | 'gaps' | 'permute' | 'critique' | 'summary' | 'consolidation';
 
@@ -24,7 +25,19 @@ export type ReviewEvent =
   | { kind: 'diff'; filesChanged: number; additions: number; deletions: number; truncated: boolean; at: number }
   | { kind: 'passStart'; pass: PassName; label: string; at: number }
   | { kind: 'passOutput'; pass: PassName; chunk: string; at: number }
-  | { kind: 'passDone'; pass: PassName; findingCount: number; durationMs: number; at: number }
+  | {
+      kind: 'passDone';
+      pass: PassName;
+      findingCount: number;
+      durationMs: number;
+      // Optional telemetry from the CLI call. Missing for resume-rehydrated
+      // passDone events (older snapshots predate this field) and for any pass
+      // that didn't make a CLI call.
+      usage?: CliUsage;
+      toolsInvoked?: CliToolInvocation[];
+      apiRetries?: number;
+      at: number;
+    }
   | { kind: 'passError'; pass: PassName; error: string; at: number }
   // Pass failed and we're waiting for the user to choose retry/skip/stop. The
   // orchestrator is parked until a decision arrives via the panel message bus.

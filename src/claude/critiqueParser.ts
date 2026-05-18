@@ -117,17 +117,43 @@ export function normalizeCritiqueFinding(
       pass: 'critique',
       originalLang: lang,
       suggestedFix: f?.suggestedFix
-        ? {
-            description: String(f.suggestedFix.description ?? ''),
-            replacement: String(f.suggestedFix.replacement ?? ''),
-            range: { startLine, endLine },
-            confidence: ['high', 'medium', 'low'].includes(f.suggestedFix.confidence)
-              ? f.suggestedFix.confidence
-              : 'medium',
-          }
+        ? parseCritiqueSuggestedFix(f.suggestedFix, { startLine, endLine })
         : undefined,
     },
   };
+}
+
+/**
+ * Mirror of parser.ts:parseSuggestedFix — kept local to avoid a circular dep
+ * between parser modules. Same accept-both-schemas behavior: new fixes carry
+ * oldString/newString (+ optional context), legacy critique output may still
+ * carry just `replacement`, and the applier picks its strategy at apply time.
+ */
+function parseCritiqueSuggestedFix(
+  raw: any,
+  range: { startLine: number; endLine: number },
+): import('../types').SuggestedFix {
+  const fix: import('../types').SuggestedFix = {
+    description: String(raw.description ?? ''),
+    range,
+    confidence: ['high', 'medium', 'low'].includes(raw.confidence) ? raw.confidence : 'medium',
+  };
+  if (typeof raw.oldString === 'string' && raw.oldString.length > 0) {
+    fix.oldString = raw.oldString;
+  }
+  if (typeof raw.newString === 'string') {
+    fix.newString = raw.newString;
+  }
+  if (typeof raw.contextBefore === 'string' && raw.contextBefore.length > 0) {
+    fix.contextBefore = raw.contextBefore;
+  }
+  if (typeof raw.contextAfter === 'string' && raw.contextAfter.length > 0) {
+    fix.contextAfter = raw.contextAfter;
+  }
+  if (typeof raw.replacement === 'string') {
+    fix.replacement = raw.replacement;
+  }
+  return fix;
 }
 
 function toStringArray(v: any): string[] {

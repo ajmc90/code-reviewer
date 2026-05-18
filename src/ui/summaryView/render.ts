@@ -29,6 +29,39 @@ export function formatAgo(ms: number, lang: Lang): string {
   return t('summary.agoDay', lang, { n: d });
 }
 
+/**
+ * Render a verdict badge with a rich tooltip (via the shared .tip pattern in
+ * summaryView/styles.ts) instead of the legacy `title=` attribute. The badge
+ * label stays short — the tooltip carries the title + hint that explains
+ * what the verdict means in practice.
+ *
+ * Used for both the LAST REVIEW pill (className='verdict') and each row in
+ * RECENT REVIEWS (className='hist__verdict'). Verdict values that don't map
+ * to one of the 5 enum keys render without a tooltip — the parser already
+ * normalizes incoming data, but this stays robust against historical entries
+ * that slipped through.
+ */
+export function renderVerdictBadge(
+  verdictRaw: string | undefined,
+  displayLabel: string,
+  lang: Lang,
+  className: 'verdict' | 'hist__verdict' = 'verdict',
+): string {
+  const v = String(verdictRaw || '').toLowerCase();
+  const VALID = new Set(['block', 'needs-changes', 'approve-with-comments', 'approve', 'praise']);
+  if (!VALID.has(v)) {
+    return `<span class="${className}" data-v="${esc(v)}">${esc(displayLabel)}</span>`;
+  }
+  // Open downward + right-aligned. The sidebar verdict sits near the top of
+  // each card (LAST REVIEW) or row (RECENT REVIEWS history), so opening
+  // upward would clip against the previous element's bottom. Opening
+  // downward gives the popover room to render in normal flow, and tip--end
+  // keeps it from spilling past the card's right edge.
+  const title = esc(t(`verdict.${v}.title` as Parameters<typeof t>[0], lang));
+  const hint = esc(t(`verdict.${v}.hint` as Parameters<typeof t>[0], lang));
+  return `<span class="${className} tip-host" data-v="${esc(v)}" tabindex="0">${esc(displayLabel)}<span class="tip tip--end" role="tooltip"><span class="tip__title">${title}</span><span class="tip__hint">${hint}</span></span></span>`;
+}
+
 interface ViewState {
   lang: Lang;
   result: ReviewResult | null;
@@ -202,7 +235,7 @@ function renderLastResult(s: ViewState): string {
           <span class="kicker">${esc(t('summary.lastReview', lang))}</span>
           <h3><code>${esc(summary.branch)}</code> <span class="vs">${esc(t('summary.vs', lang))}</span> <code>${esc(summary.baseBranch)}</code></h3>
         </div>
-        <span class="verdict" data-v="${esc(summary.overallVerdict || '')}">${esc(verdict)}</span>
+        ${renderVerdictBadge(summary.overallVerdict, verdict, lang)}
       </div>
       <div class="result__meta">
         <span>${esc(t('summary.files', lang, { count: summary.filesChanged }))}</span><span class="sep">·</span>
@@ -240,7 +273,7 @@ function renderHistory(s: ViewState): string {
             <code class="hist__base">${esc(e.baseBranch)}</code>
           </span>
           <span class="hist__side">
-            <span class="hist__verdict" data-v="${esc(e.verdict)}">${esc((e.verdict || '').toUpperCase())}</span>
+            ${renderVerdictBadge(e.verdict, (e.verdict || '').toUpperCase(), lang, 'hist__verdict')}
             ${counts}
             <span class="hist__ago">${esc(ago)}</span>
           </span>

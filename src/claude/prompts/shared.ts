@@ -1,6 +1,99 @@
 import { ChangeMapEntry, FindingIndexEntry } from '../../types';
 import { Lang } from '../../i18n';
 
+/**
+ * Shared block describing a single Finding's shape. Used by both the
+ * findings-only contract (specialists) and the full contract (summary pass)
+ * so the field requirements stay in sync. Edit here, not in two places.
+ */
+const FINDING_SHAPE = `Array<{
+    file: string;                   // repo-relative path, MUST match a file in the diff
+    startLine: number;              // 1-indexed line in the NEW (head) version of the file
+    endLine: number;                // inclusive, 1-indexed
+    severity: "critical" | "major" | "minor" | "nit" | "praise";
+    category: "bug" | "security" | "performance" | "correctness" | "maintainability"
+            | "readability" | "tests" | "docs" | "style" | "architecture"
+            | "accessibility" | "concurrency" | "data-integrity" | "api-contract" | "other";
+    title: string;                  // <= 90 chars, imperative-ish. Prefix with "Related: " if it extends a prior finding.
+    description: string;            // 1-4 sentences, plain
+    reasoning: string;              // WHY this is a problem. Show your work.
+    questionsRaised: string[];      // questions you asked yourself while reviewing this spot
+    alternativesConsidered: string[]; // other ways this could be written, with trade-offs
+    evidence: string[];             // direct quotes/snippets from the diff that prove the point
+    confidence: "high" | "medium" | "low";
+    relatedFiles: string[];         // other files that should be checked together
+    suggestedFix?: {
+      description: string;
+      oldString: string;            // EXACT substring currently in the file. The applier searches for this and replaces it. Must be a verbatim copy from the diff (matching whitespace, quotes, casing). Include enough surrounding lines for the match to be UNIQUE in the file.
+      newString: string;            // exact replacement text. Indentation must match what the file expects at that position.
+      contextBefore?: string;       // optional 1-3 lines IMMEDIATELY before oldString — only needed when oldString could match more than once in the file (e.g. a common pattern like "return null;"). Used by the applier to disambiguate.
+      contextAfter?: string;        // optional 1-3 lines IMMEDIATELY after oldString — same role as contextBefore.
+      confidence: "high" | "medium" | "low";
+    };
+  }>`;
+
+const SUGGESTED_FIX_RULES = `
+Hard rules:
+- File paths and line numbers MUST be real and verifiable in the provided diff.
+- If you cannot precisely locate a problem, lower confidence to "low" and say so in reasoning.
+- Never invent code that is not in the diff or in the project context.
+- praise findings are allowed but use sparingly and only for things truly worth highlighting.
+
+suggestedFix rules (CRITICAL — fixes are applied via search/replace using oldString → newString. The applier searches the live file for oldString, so it MUST match the current file byte-for-byte):
+
+oldString:
+- Copy oldString VERBATIM from the file in the diff. Same indentation (tabs vs spaces), same quote style, same trailing whitespace, same casing, same line endings as the original.
+- oldString MUST be UNIQUE in the file. If the offending construct alone could match multiple places (e.g. a generic "return null;" or "} else {"), EXTEND oldString upward/downward to include enough surrounding lines to make it unique — typically a few lines above and below.
+- oldString MUST cover a SYNTACTICALLY COMPLETE unit. Never start or end in the middle of a multi-line JSX tag, an open brace, an open parenthesis, a multi-line string, or an expression. If the smallest meaningful unit spans 20 lines, oldString must span those 20 lines.
+- oldString MUST cover EVERYTHING that newString is replacing. If newString rewrites a <label>…</label> block, oldString must include the entire <label>…</label> block — not just its opening tag. Failing this is the #1 way fixes corrupt files: the new code gets inserted but the old code survives intact below it.
+- Do NOT include diff markers (leading "+"/"-"). Those are in the diff format you're reading, not in the file itself.
+
+newString:
+- newString is what oldString gets replaced with. It must be a self-contained, syntactically valid drop-in for the exact span that oldString covers. After substitution, the file must still parse: every tag opened is closed, braces/parens balance, no attributes or fragments from the surrounding code are left orphaned, no unintended sibling elements are deleted.
+- newString preserves everything in oldString that wasn't the problem. If oldString contained more than just the offending construct (the wrapping div, sibling lines, etc.), newString must reconstruct that wrapping context faithfully — do NOT silently drop it.
+- newString uses the same indentation style and base indent level as oldString, so the resulting file is not visibly malformatted.
+- newString is for REPLACING what's in oldString. Never use it to ADD a new construct ALONGSIDE the original (e.g. adding a new button to a form). Additive changes belong in description as prose with suggestedFix omitted.
+
+contextBefore / contextAfter (optional):
+- Only set these when oldString might still match more than once even after extending it. Each is 1-3 lines of file content IMMEDIATELY adjacent to oldString (above for contextBefore, below for contextAfter). The applier uses them only as tiebreakers.
+
+When to OMIT suggestedFix entirely:
+- The fix needs edits in multiple non-contiguous regions, or in a different file.
+- You cannot extract an oldString that is BOTH unique in the file AND covers a syntactically complete unit AND covers everything newString replaces.
+- The change is additive (new construct, not a substitution).
+A missing suggestedFix is strictly better than one that corrupts the file. Explain the fix in description/reasoning prose instead.
+
+startLine / endLine: still required on the finding itself (they drive the editor decoration and the location shown on the card) — set them to cover the same span as oldString.
+`.trim();
+
+/**
+ * Findings-only contract used by every pass EXCEPT the final summary pass.
+ *
+ * Why two contracts: specialists (security, performance, tests, gaps, permute,
+ * accessibility) and explore previously had to emit a full `summary` envelope
+ * even though the orchestrator only consumes their `findings`. The summary
+ * output was discarded — 30-40% of each specialist's output tokens spent on
+ * dead content. The summary pass is the only place where summary is consumed
+ * (via parser.ts parseClaudeOutput → ReviewSummary), so only summary.ts uses
+ * the full JSON_CONTRACT below.
+ *
+ * The parser is tolerant — it accepts both shapes — so passes that briefly
+ * regress to including a summary still work, just at a higher token cost.
+ */
+export const JSON_CONTRACT_FINDINGS_ONLY = `
+You MUST respond with ONLY a single JSON object. No prose, no markdown fences, no preamble.
+
+DO NOT include a "summary" key. The orchestrator already runs a dedicated summary pass at the end; any summary you produce here is discarded and just costs tokens. Emit ONLY the findings array.
+
+The object must match this TypeScript shape exactly:
+
+interface Output {
+  findings: ${FINDING_SHAPE};
+}
+
+${SUGGESTED_FIX_RULES}
+`.trim();
+
 export const JSON_CONTRACT = `
 You MUST respond with ONLY a single JSON object. No prose, no markdown fences, no preamble.
 
@@ -32,25 +125,16 @@ interface Output {
     relatedFiles: string[];         // other files that should be checked together
     suggestedFix?: {
       description: string;
-      replacement: string;          // the exact text to put in place of the cited range
+      oldString: string;            // EXACT substring currently in the file. The applier searches for this and replaces it. Must be a verbatim copy from the diff (matching whitespace, quotes, casing). Include enough surrounding lines for the match to be UNIQUE in the file.
+      newString: string;            // exact replacement text. Indentation must match what the file expects at that position.
+      contextBefore?: string;       // optional 1-3 lines IMMEDIATELY before oldString — only needed when oldString could match more than once in the file. Used by the applier to disambiguate.
+      contextAfter?: string;        // optional 1-3 lines IMMEDIATELY after oldString — same role as contextBefore.
       confidence: "high" | "medium" | "low";
     };
   }>;
 }
 
-Hard rules:
-- File paths and line numbers MUST be real and verifiable in the provided diff.
-- If you cannot precisely locate a problem, lower confidence to "low" and say so in reasoning.
-- Never invent code that is not in the diff or in the project context.
-- praise findings are allowed but use sparingly and only for things truly worth highlighting.
-
-suggestedFix rules (CRITICAL — fixes are applied verbatim by replacing lines [startLine..endLine] with replacement):
-- startLine/endLine MUST cover a SYNTACTICALLY COMPLETE unit. Never end the range in the middle of an expression, a multi-line JSX tag, an open brace, an open parenthesis, or a multi-line string. If the smallest meaningful unit spans 20 lines, the range must span 20 lines — do NOT cite only the first or last line.
-- replacement MUST be a self-contained, syntactically valid drop-in for that exact range. After substitution, the file must still parse: every tag opened in the replacement is closed in the replacement, every brace/paren balances, no attributes or fragments from the surrounding code are left orphaned, no unintended sibling elements are deleted.
-- replacement preserves everything outside the cited range. If the original range contained more than just the offending construct (e.g. you are fixing the <input> inside a <div className="field">…</div>, and your range includes the wrapping div), the replacement must reconstruct the wrapping context faithfully, NOT silently drop it.
-- replacement uses the same indentation style and base indent level as the lines being replaced, so the resulting file is not visibly malformatted.
-- If you cannot produce a replacement that satisfies these rules (e.g. the right fix needs edits in multiple non-contiguous regions, or in a different file), OMIT suggestedFix entirely and explain the fix in description/reasoning instead. A missing suggestedFix is strictly better than one that corrupts the file.
-- Never use suggestedFix to ADD a new construct alongside the original (e.g. adding a submit button to a form). suggestedFix is for REPLACING the cited range. Additive changes belong in description as prose.
+${SUGGESTED_FIX_RULES}
 `.trim();
 
 /**
@@ -117,7 +201,7 @@ export function languageDirective(lang: Lang): string {
       '- Write ALL user-visible string VALUES in Spanish (neutral Latin American Spanish). This includes: title, description, reasoning, questionsRaised, alternativesConsidered, evidence, executiveSummary, topConcerns, strengths, suggestedFix.description.',
       '- DO NOT translate JSON KEYS — they are part of the contract and must remain in English.',
       '- DO NOT translate enum values (severity, category, confidence, overallVerdict).',
-      '- Inside suggestedFix.replacement, the value is CODE. Keep the code verbatim; only translate inline comments if present.',
+      '- Inside suggestedFix.oldString and suggestedFix.newString, the value is CODE. Keep the code verbatim; only translate inline comments if present. The same applies to contextBefore/contextAfter.',
       '- Evidence items are quoted diff snippets — keep them verbatim, do NOT translate code.',
       '- The "Related: " prefix in titles stays in English (it is a marker, not prose).',
     ].join('\n');

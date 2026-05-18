@@ -12,6 +12,17 @@ header{
   padding: var(--s-3) var(--s-5);
   border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent);
+  /* Pinning the header is a defensive measure: if something inside the
+   * webview ever scrolls the body (e.g. a programmatic scrollIntoView or
+   * an anchor click), the header stays put instead of being pushed off
+   * screen. Combined with body { overflow: hidden } in reset.ts. */
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  /* Solid background so content scrolling underneath doesn't bleed
+   * through the gradient. */
+  background-color: var(--bg);
+  background-image: linear-gradient(180deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent);
 }
 .brand{
   display:flex; align-items:center; gap:var(--s-2);
@@ -45,6 +56,15 @@ header{
   letter-spacing: .06em;
   color: var(--accent-fg);
   background: var(--fg-subtle);
+  white-space: nowrap;
+}
+/* Overflow protection only on badges WITHOUT the tooltip wrapper — tip-host
+ * variants need overflow visible so the popover can render outside the badge.
+ * See the matching block in summaryView/styles.ts for the same reasoning. */
+.verdict:not(.tip-host){
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .verdict[data-v="running"]{ background: var(--fg-subtle); animation: pulse 1.6s ease-in-out infinite }
 .verdict[data-v="block"]            { background: var(--sev-critical) }
@@ -56,7 +76,11 @@ header{
 
 .spacer{ flex:1 }
 
-.counters{ display:flex; gap:var(--s-1); align-items:center; flex-wrap:wrap }
+.counters{ display:flex; gap:var(--s-1); align-items:center; flex-wrap:wrap; transition: opacity var(--dur-fast) var(--ease) }
+/* When all severity counts are zero (idle / pre-review), the strip is noise.
+ * Fade it so the user's eye lands on the CTA, not on six grey "0" pills. */
+.counters[data-empty="1"]{ opacity: .35 }
+.counters[data-empty="1"]:hover{ opacity: .8 }
 .counter{
   display:inline-flex; align-items:center; gap:var(--s-1);
   padding: 3px var(--s-2);

@@ -139,6 +139,16 @@
         "category": "%category.claudeReview%"
       },
       {
+        "command": "claudeReviewer.estimateReview",
+        "title": "%cmd.estimateReview%",
+        "category": "%category.claudeReview%"
+      },
+      {
+        "command": "claudeReviewer.dumpSamples",
+        "title": "%cmd.dumpSamples%",
+        "category": "%category.claudeReview%"
+      },
+      {
         "command": "claudeReviewer.clearCache",
         "title": "%cmd.clearCache%",
         "category": "%category.claudeReview%"
@@ -376,6 +386,32 @@
           "type": "number",
           "default": 600000,
           "description": "%config.cliTimeoutMs%"
+        },
+        "claudeReviewer.developerDiagnostics": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.developerDiagnostics%"
+        },
+        "claudeReviewer.useSessionReuse": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.useSessionReuse%"
+        },
+        "claudeReviewer.contextExcludeGlobs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "**/package-lock.json",
+            "**/yarn.lock",
+            "**/pnpm-lock.yaml",
+            "**/Cargo.lock",
+            "**/Gemfile.lock",
+            "**/composer.lock",
+            "**/poetry.lock",
+            "**/__snapshots__/**",
+            "**/*.snap"
+          ],
+          "description": "%config.contextExcludeGlobs%"
         }
       }
     },

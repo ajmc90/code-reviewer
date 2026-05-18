@@ -166,14 +166,6 @@ export const PASS_SELECTOR_CSS = String.raw`
 .pass-tip__hint{ color: var(--fg-muted) }
 .pass-tip__detail{ color: var(--fg-subtle); font-size: 11px; font-style: italic }
 
-/* Estimate footer */
-.passes-estimate{
-  font-size: var(--t-xs);
-  color: var(--fg-subtle);
-  font-variant-numeric: tabular-nums;
-}
-.passes-estimate:empty{ display: none }
-
 /* Active-pass summary (read-only chips shown when Advanced is collapsed) */
 .active-passes{
   display: flex; flex-wrap: wrap; gap: 4px;
@@ -223,14 +215,24 @@ export const PASS_SELECTOR_CSS = String.raw`
 }
 .advanced-pane[hidden]{ display: none }
 
-/* Run section — primary CTA card. Sticky so it survives scroll. */
+/* Run section — primary CTA card. Sticky so it survives scroll.
+ *
+ * The container needs an OPAQUE backdrop, not a gradient: the gradient
+ * approach left a ~12px band where content scrolling under the sticky
+ * area showed through, making the run-card look like it was floating on
+ * top of the picker / passes list. We use the same elevated background
+ * as the .left pane (so the seam between scrolled content and sticky
+ * area is invisible) plus a thin top border to anchor the card visually
+ * without a hard line across the panel. */
 .section--run{
   position: sticky; bottom: 0;
-  margin-top: var(--s-2);
-  padding-top: var(--s-2);
+  padding: var(--s-2) 0 0;
   z-index: 5;
-  /* fade so content scrolling under it has visual breathing room */
-  background: linear-gradient(to bottom, transparent 0, var(--bg) 12px);
+  background: var(--bg-elev);
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  /* Soft drop shadow ABOVE the card (negative y) so scrolled content fades
+   * into the sticky area instead of butting up against the border. */
+  box-shadow: 0 -8px 12px -6px color-mix(in srgb, var(--bg) 60%, transparent);
 }
 .run-card{
   display: flex; flex-direction: column; gap: var(--s-3);
@@ -288,72 +290,6 @@ export const PASS_SELECTOR_CSS = String.raw`
 .run-chip[data-empty="1"] .run-chip__val{
   color: var(--fg-subtle); font-style: italic;
 }
-.run-chip[data-tone="time"] .run-chip__val{ font-family: inherit }
-
-/* Calibration tag on the time chip — tiny pill that hints at estimate quality. */
-.run-chip__tag{
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  padding: 1px 5px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--fg-subtle);
-  background: transparent;
-  margin-left: 2px;
-}
-.run-chip[data-source="calibrated"] .run-chip__tag{
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-}
-.run-chip[data-source="mixed"] .run-chip__tag{
-  color: color-mix(in srgb, var(--accent) 70%, var(--fg-muted) 30%);
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border) 70%);
-}
-
-/* Rich tooltip on the time chip — same pattern as .pass-tip / .step-tip. */
-.run-chip--has-tip{
-  position: relative;
-  cursor: help;
-  overflow: visible;
-  outline: none;
-}
-.run-chip__tip{
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 6px);
-  left: 0;
-  min-width: 240px;
-  max-width: 340px;
-  padding: var(--s-2) var(--s-3);
-  border-radius: var(--r-md);
-  background: var(--vscode-editorWidget-background, var(--bg));
-  border: 1px solid var(--border);
-  color: var(--fg);
-  font-size: var(--t-xs);
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-  line-height: 1.45;
-  text-align: left;
-  white-space: normal;
-  box-shadow: 0 4px 14px rgba(0,0,0,.25);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
-  display: grid;
-  gap: 4px;
-}
-.run-chip--has-tip:hover .run-chip__tip,
-.run-chip--has-tip:focus-visible .run-chip__tip{
-  opacity: 1;
-  transform: translateY(0);
-}
-.run-chip__tip-title{ font-weight: 600; color: var(--fg) }
-.run-chip__tip-hint{ color: var(--fg-muted) }
-.run-chip__tip-detail{ color: var(--fg-subtle); font-size: 11px; font-style: italic }
 .run-card__btn{
   width: 100%;
   display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);

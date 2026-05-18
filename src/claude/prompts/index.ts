@@ -14,6 +14,7 @@
 
 export {
   JSON_CONTRACT,
+  JSON_CONTRACT_FINDINGS_ONLY,
   antiDuplicationBlock,
   changeMapBlock,
   truncate,

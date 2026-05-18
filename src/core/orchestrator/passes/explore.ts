@@ -4,11 +4,12 @@ import { parseClaudeOutput } from '../../../claude/parser';
 import { OrchestratorDeps } from '../types';
 import { runCli } from '../cli';
 import { tagPass } from '../helpers';
+import { PassMetrics, metricsFromCliResult } from '../metrics';
 
 export async function runExplorePass(
   deps: OrchestratorDeps,
   state: PartialReviewState,
-): Promise<{ findings: Finding[]; changeMap: ChangeMapEntry[] }> {
+): Promise<{ findings: Finding[]; changeMap: ChangeMapEntry[]; metrics: PassMetrics }> {
   const { log } = deps;
   const prompt = buildExplorePrompt({
     ctx: state.ctx,
@@ -23,9 +24,13 @@ export async function runExplorePass(
     lang: state.opts.lang,
   });
   log(`[explore] prompt = ${prompt.length} chars (${Math.round(prompt.length / 1024)} KB)`);
-  const text = await runCli(deps, prompt, 'explore');
-  log(`[explore] response = ${text.length} chars (${Math.round(text.length / 1024)} KB)`);
-  const parsed = parseClaudeOutput(text, state.opts.lang);
+  const r = await runCli(deps, prompt, 'explore');
+  log(`[explore] response = ${r.text.length} chars (${Math.round(r.text.length / 1024)} KB)`);
+  const parsed = parseClaudeOutput(r.text, state.opts.lang);
   tagPass(parsed.findings, 'explore');
-  return { findings: parsed.findings, changeMap: parsed.changeMap ?? [] };
+  return {
+    findings: parsed.findings,
+    changeMap: parsed.changeMap ?? [],
+    metrics: metricsFromCliResult(r, prompt.length),
+  };
 }

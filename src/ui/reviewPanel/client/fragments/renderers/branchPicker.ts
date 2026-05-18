@@ -3,10 +3,9 @@
  * review will compare. Includes the search box, local/remote filters, the
  * two scrollable lists, and the ahead/behind pill.
  *
- * Side-effect: on every branch selection it kicks off two host requests —
- * aheadBehind (for the pill) and diffStat (for the preflight estimate
- * scaling). Both responses come back through the message router and are
- * deduped by reqId.
+ * Side-effect: on every branch selection it kicks off an aheadBehind host
+ * request (for the pill). The response comes back through the message router
+ * and is deduped by reqId.
  */
 export const BRANCH_PICKER = `
   function filterBranches(){
@@ -52,7 +51,14 @@ export const BRANCH_PICKER = `
   function pickBranch(role, name){
     if (role==='base') state.selectedBase = name; else state.selectedHead = name;
     renderBranchPicker();
+    // Kick off both requests FIRST so estimateLoading=true before we render
+    // the welcome preview — that's what surfaces the "Calculating diff…"
+    // spinner on the first paint. If we rendered before requesting, the
+    // welcome would briefly show no diff row at all, then flicker into
+    // the spinner once the estimate request set the flag.
     requestAheadBehind();
+    requestEstimate();
+    renderRightPaneState();
   }
   function requestAheadBehind(){
     if (!state.selectedBase || !state.selectedHead){ state.abResult = null; renderAB(); return; }
@@ -60,12 +66,6 @@ export const BRANCH_PICKER = `
     const reqId = String(Math.random());
     state.abReqId = reqId;
     vscode.postMessage({type:'aheadBehind', base: state.selectedBase, head: state.selectedHead, reqId});
-    // Also fetch a preflight diff stat so the runtime estimate can scale to
-    // the actual size of the change rather than relying on hardcoded ranges.
-    const dsReqId = String(Math.random());
-    state.diffStatReqId = dsReqId;
-    state.diffStat = null;
-    vscode.postMessage({type:'diffStat', base: state.selectedBase, head: state.selectedHead, reqId: dsReqId});
   }
   function renderAB(){
     const pill = $('#ab-pill');
@@ -111,5 +111,6 @@ export const BRANCH_PICKER = `
     }
     renderBranchPicker();
     requestAheadBehind();
+    requestEstimate();
   }
 `;

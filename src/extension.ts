@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { GitService } from './git/gitService';
 import { ClaudeCliClient } from './claude/cliClient';
+import { normalizeVerdict } from './claude/parser';
 import { FindingsTreeProvider, GroupMode } from './ui/findingsTree';
 import { SummaryViewProvider, HistoryEntry } from './ui/summaryView';
 import { FindingsDecorator } from './ui/decorations';
@@ -12,7 +13,6 @@ import { PassFailureDecision, PassName, ReviewEventBus } from './core/events';
 import { PassConfig, ReviewResult } from './types';
 import { Lang, getLang, onDidChangeLanguage, setLang, t } from './i18n';
 import { CACHE_KEY, ExtensionRuntime } from './core/extensionContext';
-import { loadCalibration, recordPassSample } from './core/calibration';
 import { loadPartial, buildSummary } from './core/partialState';
 import { loadHistory, loadHistoryResult, recordHistory } from './core/historyStore';
 import { runReview } from './core/reviewController';
@@ -42,34 +42,6 @@ export async function activate(context: vscode.ExtensionContext) {
   const bus = new ReviewEventBus();
   const statusBar = new ReviewStatusBar(bus, () => getLang(context));
 
-  // Self-calibrating estimate: for each completed pass, persist its real
-  // duration alongside the diff size seen at run time. The estimator on the
-  // panel side reads this back via loadCalibration() and uses median
-  // ms-per-line to predict future runs.
-  let currentRunDiffSize = 0;
-  context.subscriptions.push(
-    bus.onEvent((e) => {
-      if (e.kind === 'start') {
-        currentRunDiffSize = 0;
-        log(`[calibration] run start — diffSize reset`);
-      } else if (e.kind === 'diff') {
-        currentRunDiffSize = Math.max(0, (e.additions || 0) + (e.deletions || 0));
-        log(`[calibration] diff event — diffSize=${currentRunDiffSize}`);
-      } else if (e.kind === 'passDone') {
-        log(`[calibration] passDone pass=${e.pass} dur=${e.durationMs}ms diffSize=${currentRunDiffSize} ${currentRunDiffSize > 0 ? '→ recording' : '→ SKIPPED (no diffSize)'}`);
-        if (currentRunDiffSize > 0) {
-          // Record THEN notify the panel — sequencing the post after the
-          // memento write resolves means the next snapshot the panel reads
-          // includes the just-finished sample. Without this ordering the
-          // panel races the storage update and shows "no prior runs" forever.
-          void recordPassSample(context, e.pass, e.durationMs, currentRunDiffSize).then(() => {
-            ReviewPanel.currentInstance()?.refreshCalibration();
-          });
-        }
-      }
-    }),
-  );
-
   const findingsTreeView = vscode.window.createTreeView('claudeReviewer.findings', {
     treeDataProvider: findingsTree,
     showCollapseAll: true,
@@ -80,8 +52,14 @@ export async function activate(context: vscode.ExtensionContext) {
   });
 
   // Mutable state shared across modules via ExtensionRuntime.
+  // Migrate-on-read: normalize the persisted result's verdict so old caches
+  // with raw LLM verdict strings ("DO NOT MERGE...") can't break the UI.
+  const persistedResult = context.workspaceState.get<ReviewResult>(CACHE_KEY) ?? null;
+  if (persistedResult?.summary) {
+    persistedResult.summary.overallVerdict = normalizeVerdict(persistedResult.summary.overallVerdict);
+  }
   const runtimeState = {
-    lastResult: context.workspaceState.get<ReviewResult>(CACHE_KEY) ?? null as ReviewResult | null,
+    lastResult: persistedResult as ReviewResult | null,
     currentReviewCts: null as vscode.CancellationTokenSource | null,
   };
   const pendingDecisions = new Map<PassName, (d: PassFailureDecision) => void>();
@@ -269,11 +247,6 @@ export async function activate(context: vscode.ExtensionContext) {
     setLang: (lang: Lang) => setLang(context, lang),
     translateFinding: async (id: string, targetLang: Lang) => {
       await translateFindingOnDemand(rt, id, targetLang);
-    },
-    getCalibration: () => {
-      const snap = loadCalibration(context);
-      log(`[calibration] loadCalibration → ${JSON.stringify(snap)}`);
-      return snap;
     },
   };
 

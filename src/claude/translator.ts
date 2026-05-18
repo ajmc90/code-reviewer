@@ -44,8 +44,12 @@ function pickSourceFields(f: Finding): TranslatedFindingFields {
     questionsRaised: f.questionsRaised ?? [],
     alternativesConsidered: f.alternativesConsidered ?? [],
     evidence: f.evidence ?? [],
+    // Only the prose description is translated. oldString/newString and the
+    // legacy replacement field carry code that must stay verbatim across
+    // languages — sending them to the translator would invite the model to
+    // "translate" identifiers and break the apply step.
     suggestedFix: f.suggestedFix
-      ? { description: f.suggestedFix.description, replacement: f.suggestedFix.replacement }
+      ? { description: f.suggestedFix.description }
       : undefined,
     // Critique decision prose: only sent when the finding actually carries it,
     // so we don't pay for translating empty strings on every "kept" finding.
@@ -66,7 +70,7 @@ function buildPrompt(source: TranslatedFindingFields, langName: string): string 
     '',
     'Rules:',
     '- Translate ONLY user-visible prose. Preserve technical terms (function/variable names, file paths, code snippets, library names) untouched.',
-    '- Inside suggestedFix.replacement, the value is CODE. Keep the code verbatim; only translate inline comments if any.',
+    '- suggestedFix only contains a description here. The code fields are stripped before translation — do not invent them.',
     '- Inside evidence, items are quoted diff snippets. Keep them verbatim — DO NOT translate code.',
     '- Preserve array order and length exactly. If an input array has 3 items, the output array MUST have 3 items.',
     '- Preserve all field names exactly as given. JSON keys must NOT be translated.',
@@ -135,8 +139,7 @@ function normalize(parsed: Record<string, unknown>, source: TranslatedFindingFie
     ? (() => {
         const f = parsed.suggestedFix as Record<string, unknown> | undefined;
         return {
-          description: asString(f?.description, source.suggestedFix.description),
-          replacement: asString(f?.replacement, source.suggestedFix.replacement),
+          description: asString(f?.description, source.suggestedFix!.description),
         };
       })()
     : undefined;

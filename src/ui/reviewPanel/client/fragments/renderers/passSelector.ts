@@ -4,7 +4,7 @@
  * preset application logic.
  *
  * renderPasses owns the advanced view and also pokes the chip row and the
- * estimate footer + start button so the entire passes area stays in sync.
+ * start button so the entire passes area stays in sync.
  * applyPreset mutates state.passes and re-renders.
  */
 export const PASS_SELECTOR = `
@@ -91,16 +91,24 @@ export const PASS_SELECTOR = `
     root.innerHTML = groupsHtml.join('');
     const total = PASS_DEFS.length;
     $('#passes-count').textContent = active === total ? '('+tMsg('panel.selectAll').toLowerCase()+')' : '('+active+'/'+total+')';
-    const est = $('#passes-estimate');
-    if (est) est.textContent = active === 0 ? '' : formatEstimate();
     // Highlight matching preset (if any).
-    const activePreset = activePresetName();
+    const activePreset = matchingPresetName();
     for (const btn of document.querySelectorAll('.preset')){
       btn.setAttribute('aria-pressed', btn.dataset.preset === activePreset ? 'true' : 'false');
     }
     // Keep the collapsed-view active-pass chips in sync with checkbox state.
     renderActivePasses();
     syncStartBtn();
+  }
+  /** Currently-matching preset name, or null if no exact match. */
+  function matchingPresetName(){
+    const active = new Set();
+    for (const def of PASS_DEFS) if (state.passes[def.key]) active.add(def.key);
+    for (const [name, keys] of Object.entries(PASS_PRESETS)){
+      if (active.size !== keys.length) continue;
+      if (keys.every(k => active.has(k))) return name;
+    }
+    return null;
   }
   function applyPreset(name){
     const keys = PASS_PRESETS[name];
@@ -109,6 +117,7 @@ export const PASS_SELECTOR = `
     for (const def of PASS_DEFS) state.passes[def.key] = setKeys.has(def.key);
     renderPasses();
     persist();
+    requestEstimate();
   }
   function syncStartBtn(){
     // The Run card is the source of truth for button visual + enable state.

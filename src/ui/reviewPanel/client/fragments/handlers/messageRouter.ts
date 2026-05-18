@@ -33,23 +33,18 @@ export const MESSAGE_ROUTER = `
       else { errEl.textContent = ''; errEl.setAttribute('data-empty', '1') }
     } else if (m.type === 'aheadBehind'){
       if (m.reqId !== state.abReqId) return;
-      state.abResult = m.result; renderAB();
-    } else if (m.type === 'diffStat'){
-      if (m.reqId !== state.diffStatReqId) return;
-      state.diffStat = m.result; // {filesChanged, additions, deletions} | null
-      renderRunCard();
-      const est = $('#passes-estimate');
-      if (est) est.textContent = activePassCount() === 0 ? '' : formatEstimate();
-    } else if (m.type === 'calibration'){
-      state.calibration = m.snapshot || { ratios: {} };
-      // TEMP DIAGNOSTIC: dump the snapshot so we can see what the host is sending.
-      console.log('[claude-review] calibration snapshot received:', JSON.stringify(state.calibration));
-      console.log('[claude-review] active passes:', Object.keys(state.passes).filter(k => state.passes[k]));
-      // Re-render estimate-bearing surfaces so the calibrated numbers replace
-      // whatever default we showed during initial load.
-      renderRunCard();
-      const est = $('#passes-estimate');
-      if (est) est.textContent = activePassCount() === 0 ? '' : formatEstimate();
+      state.abResult = m.result; renderAB(); renderRightPaneState();
+    } else if (m.type === 'estimate'){
+      applyEstimate(m); renderRightPaneState();
+    } else if (m.type === 'settings'){
+      applySettings(m); renderRightPaneState();
+    } else if (m.type === 'settingUpdated'){
+      // Host echoed back the result of an updateSetting write. We don't need
+      // to re-render — applySettings already ran optimistically — but if it
+      // failed we surface the error in the log so the user knows.
+      if (m.ok === false){
+        appendLive('warn', '[settings] failed to update ' + (m.key||'?') + ': ' + (m.error||'unknown'), 'review');
+      }
     } else if (m.type === 'partialSummary'){
       state.partial = m.summary || null;
       renderResumeBanner();
@@ -74,14 +69,19 @@ export const MESSAGE_ROUTER = `
 
   // Initial paint so empty states render before any events arrive.
   applyLeftWidth();
+  applyLeftHeight();
   applyCollapsed();
   applyAdvancedOpen();
+  applyLogOpen();
   renderPasses();
   renderActivePasses();
   renderTimeline();
   renderChangeMap();
   renderFindings();
   renderRunCard();
+  renderCostPill();
+  renderAdvancedOptions();
+  wireAdvancedOptions();
   bumpCounter();
 
   vscode.postMessage({type:'ready'});

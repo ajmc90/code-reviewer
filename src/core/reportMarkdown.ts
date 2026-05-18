@@ -58,9 +58,15 @@ export function renderReportMarkdown(r: ReviewResult, lang: Lang): string {
       lines.push('');
       lines.push(`**${m('md.suggestedFix', { level: f.suggestedFix.confidence })}**`);
       lines.push(f.suggestedFix.description);
-      lines.push('```');
-      lines.push(f.suggestedFix.replacement);
-      lines.push('```');
+      // The fix payload may carry oldString/newString (new schema) or just
+      // replacement (legacy). Either way we surface the resulting code so a
+      // human reading the report can see what would land in the file.
+      const fixCode = f.suggestedFix.newString ?? f.suggestedFix.replacement;
+      if (fixCode) {
+        lines.push('```');
+        lines.push(fixCode);
+        lines.push('```');
+      }
     }
   }
 

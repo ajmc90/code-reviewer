@@ -10,6 +10,10 @@ export const TWO_PANE_CSS = String.raw`
   --left-min: 280px;
   --left-max: 720px;
   --rail-w: 56px;
+  /* Stacked-layout (mobile / narrow) height of the left pane. Defaults to
+   * "auto" so the section sizes to its content; once the user drags the
+   * horizontal gutter we switch this to a pixel value and persist it. */
+  --left-h: auto;
 }
 main{
   display:grid;
@@ -43,6 +47,8 @@ main[data-collapsed="1"] .left > .left-rail{ display: flex }
   overflow:auto;
   padding: var(--s-5) var(--s-6);
   min-width: 0;
+  container-type: inline-size;
+  container-name: right;
 }
 .left::-webkit-scrollbar, .right::-webkit-scrollbar{ width:10px; height:10px }
 .left::-webkit-scrollbar-thumb, .right::-webkit-scrollbar-thumb{
@@ -167,5 +173,10 @@ main[data-collapsed="1"] .collapse-btn{
   margin-top: var(--s-3);
 }
 main:not([data-collapsed="1"]) .rail-spinner{ display:none }
+/* Only spin when a review is actually running. The CSS hook is the
+ * data-state attribute on the sibling .rail-dot, which renderRail() sets
+ * to 'running' / 'done' / 'error' / 'idle'. Using :has() keeps the
+ * spinner declarative — no extra JS toggle. */
+.left-rail:not(:has(.rail-dot[data-state="running"])) .rail-spinner{ display: none }
 
 `;

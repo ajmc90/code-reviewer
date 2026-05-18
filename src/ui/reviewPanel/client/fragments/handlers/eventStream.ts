@@ -16,12 +16,12 @@ export const EVENT_STREAM = `
       const pill = $('#branches');
       pill.setAttribute('data-visible', '1');
       pill.textContent = e.headBranch + ' ← ' + e.baseBranch;
-      $('#verdict').dataset.v = 'running'; $('#verdict').textContent = 'RUNNING';
+      setVerdict('running', tMsg('panel.verdictRunning'));
       state.findings = []; state.steps.clear(); state.result = null; state.isRunning = true;
       state.changeMap = []; state.consolidation = null; state.conditionalSkips = {};
       state.pendingByPass.clear();
       state.runStartedAt = e.at; state.currentPhase = null;
-      $('#exec').hidden = true; $('#bullets').hidden = true;
+      $('#summary').hidden = true;
       bumpCounter(); renderFindings(); renderTimeline(); renderBranchPicker(); renderResumeBanner(); renderChangeMap();
       appendLive('info', tMsg('log.reviewStarted', {head: e.headBranch, base: e.baseBranch}), 'review');
     } else if (e.kind === 'context'){
@@ -33,23 +33,65 @@ export const EVENT_STREAM = `
       renderTimeline();
       appendLive('info', e.filesChanged+' files changed (+'+e.additions+'/-'+e.deletions+')'+(e.truncated?' [diff truncated]':''), 'diff');
     } else if (e.kind === 'passStart'){
-      state.steps.set(e.pass, { status:'running', startedAt: e.at, detail: 'sending prompt to Claude…', lastActivity: '' });
+      state.steps.set(e.pass, {
+        status:'running', startedAt: e.at,
+        detail: tMsg('timeline.phase.sending'),
+        lastActivity: '',
+        // Structured streaming state: incrementally accumulated as chunks arrive.
+        // streamedChars counts text_delta bytes from the LLM (NEVER rendered raw —
+        // those used to be the JSON-fragment noise on the Security row).
+        // tools tracks which tools the CLI invoked. metrics holds the parsed
+        // telemetry summary line once the pass finishes.
+        streamedChars: 0, tools: [], metrics: null,
+      });
       renderTimeline();
       appendLive('info', 'started', e.pass);
     } else if (e.kind === 'passOutput'){
       const step = state.steps.get(e.pass);
-      const trimmed = String(e.chunk||'').trim();
+      const chunk = String(e.chunk||'');
+      const trimmed = chunk.trim();
       if (step){
-        if (trimmed){
-          step.lastActivity = trimmed.slice(0, 120);
-          step.detail = 'streaming · ' + truncateForMeta(trimmed);
+        const classified = classifyChunk(trimmed);
+        if (classified.kind === 'metrics'){
+          // Final per-pass telemetry line ("◆ $0.49 in=... out=... 63s tools=2").
+          // Store it structured so the renderer can lay out chips instead of the
+          // dense one-liner. The chunk itself is still appended to the live log
+          // verbatim so the raw audit trail stays intact. Note: telemetry is
+          // emitted AFTER passDone by the orchestrator, so step.status is
+          // already 'done' here — the chips will render on the next paint.
+          step.metrics = classified.metrics;
+        } else if (step.status !== 'running'){
+          // Phase/tool/streamText updates only matter while the pass is live.
+          // After passDone we want the chips to stay; flipping detail back to
+          // "Streaming · 1234 chars" because a late text_delta arrived would
+          // be wrong.
+        } else if (classified.kind === 'tool'){
+          // Only remember unique tool names; multiple same-tool invocations
+          // would otherwise spam the chip count.
+          if (classified.tool && !step.tools.includes(classified.tool)){
+            step.tools = step.tools.concat([classified.tool]);
+          }
+          step.detail = renderToolDetail(step.tools);
+          step.lastActivity = '';
+        } else if (classified.kind === 'phase'){
+          // High-signal lifecycle marker (thinking/writing/retry/parsing).
+          step.detail = classified.label;
+          step.lastActivity = '';
+        } else if (classified.kind === 'streamText'){
+          // Raw text_delta from the LLM — this is the JSON-fragment noise we
+          // hide. Surface only a char counter so the user still sees progress.
+          step.streamedChars = (step.streamedChars||0) + chunk.length;
+          step.detail = tMsg('timeline.phase.streaming', { chars: fmtCount(step.streamedChars) });
+          step.lastActivity = '';
         }
+        // 'noise' (empty, usage echoes, etc.) is ignored on purpose — keeps the
+        // last meaningful detail visible instead of flickering back to blank.
         renderTimeline();
       }
       if (trimmed) appendLive('info', trimmed, e.pass);
     } else if (e.kind === 'passDone'){
       const existing = state.steps.get(e.pass) || {};
-      state.steps.set(e.pass, { ...existing, status:'done', endedAt: e.at, detail: e.findingCount+' findings · '+(Math.round(e.durationMs/100)/10)+'s' });
+      state.steps.set(e.pass, { ...existing, status:'done', endedAt: e.at, findingCount: e.findingCount, durationMs: e.durationMs, detail: '' });
       // Flush this pass's buffered findings into the visible list now that the
       // pass is complete. Holding them back during the pass avoids the
       // "appears then vanishes" effect when consolidation collapses duplicates.
@@ -89,10 +131,14 @@ export const EVENT_STREAM = `
       flushAllPending();
       state.isRunning = false;
       state.runStartedAt = null; state.currentPhase = null;
-      $('#verdict').dataset.v = 'needs-changes'; $('#verdict').textContent = 'PAUSED';
+      if (state.stopWatchdog){ clearTimeout(state.stopWatchdog); state.stopWatchdog = null; }
+      setVerdict('needs-changes', tMsg('panel.verdictPaused'));
       renderBranchPicker();
       renderTimeline();
       renderResumeBanner();
+      renderRunCard();
+      renderRightPaneState();
+      renderCostPill();
       appendLive('warn', tMsg('log.reviewPaused', {reason: e.reason}), 'review');
     } else if (e.kind === 'retryPassStart'){
       // Reserved for future use — the orchestrator currently fires passStart
@@ -126,6 +172,9 @@ export const EVENT_STREAM = `
       // collapsible "Changes in this branch" section above the findings grid.
       state.changeMap = e.entries || [];
       renderChangeMap();
+      // In-progress right-pane panel lists these files; repaint so the user
+      // sees them stream in instead of waiting for the next 1s tick.
+      renderRightPaneState();
     } else if (e.kind === 'consolidation'){
       // Local Phase C ran. Stash the counters AND drop a synthetic step entry
       // into the same Map that drives the timeline — Maps preserve insertion
@@ -169,34 +218,177 @@ export const EVENT_STREAM = `
       appendLive(e.level, e.message);
     } else if (e.kind === 'done'){
       flushAllPending();
-      $('#verdict').dataset.v = e.verdict; $('#verdict').textContent = (e.verdict||'').toUpperCase();
+      setVerdict(e.verdict);
       state.isRunning = false; state.runStartedAt = null; state.currentPhase = null;
+      if (state.stopWatchdog){ clearTimeout(state.stopWatchdog); state.stopWatchdog = null; }
       renderBranchPicker(); renderResumeBanner();
+      // The run card pinned itself to "Stopping…" when the user clicked Stop;
+      // without an explicit re-render here it stays that way forever because
+      // the renderRunCard for the running state was only re-invoked by the
+      // 1-second tick that stops firing once isRunning is false.
+      renderRunCard();
+      renderCostPill();
+      // Right-pane state transitions out of "in-progress" — repaint so the
+      // sticky header is torn down and either the welcome (no findings) or
+      // a clean-review message takes its place.
+      renderRightPaneState();
     } else if (e.kind === 'cancelled'){
       // Drop anything still buffered — the user canceled, partial in-flight
       // findings would be noise.
       state.pendingByPass.clear();
-      $('#verdict').dataset.v = 'needs-changes'; $('#verdict').textContent = 'CANCELLED';
+      setVerdict('needs-changes', tMsg('panel.verdictCancelled'));
       state.isRunning = false; state.runStartedAt = null; state.currentPhase = null;
+      if (state.stopWatchdog){ clearTimeout(state.stopWatchdog); state.stopWatchdog = null; }
       renderBranchPicker(); renderResumeBanner();
+      renderRunCard();
+      renderCostPill();
+      renderRightPaneState();
     }
+  }
+
+  // Heuristic severity for a concern bullet. The LLM writes the bullets as
+  // free-form strings; we don't have a real link back to a finding. So we
+  // sniff keywords/phrases that strongly correlate with critical/major work
+  // to color the bullet dot. Unknown → neutral. False positives are cheap
+  // (a gray dot becomes orange), so we err on the side of marking things.
+  function classifyConcernSeverity(text){
+    const t = String(text||'').toLowerCase();
+    if (/\b(sqli|sql injection|rce|remote code execution|xss|csrf|idor|auth(?:n|z)? (?:bypass|forge|collapse)|token (?:forg|leak)|secret (?:committed|leak|expos)|credential (?:leak|theft|expos)|backdoor|deserializ|prototype pollut|path traversal|directory traversal|ssrf|open redirect|hardcoded (?:secret|password|key)|jwt[_\s-]?secret)\b/.test(t)) return 'critical';
+    if (/\b(security|vulnerab|injection|leak|expose|leaks|leaking|race condition|deadlock|data loss|memory leak|infinite loop|crash|panic|unhandled|null deref|use after free|unauthor|enumerat|bypass|regression|breaks?|broken|fails?|incorrect|wrong|missing validation|removed validation|stripped|swallow)/.test(t)) return 'major';
+    if (/\b(accessibility|a11y|keyboard|aria|focus|contrast|typo|naming|style|docs?|comment|warn|lint|smell)\b/.test(t)) return 'minor';
+    return '';
+  }
+
+  function renderSummaryBar(summary){
+    const root = $('#summary');
+    const verdict = summary.overallVerdict || 'approve-with-comments';
+    root.dataset.verdict = verdict;
+
+    // Verdict pill (visible even when body is collapsed).
+    const verdictIcon = root.querySelector('.summary__verdict-icon');
+    if (verdictIcon){
+      verdictIcon.textContent = verdict === 'block' ? '!' : verdict === 'needs-changes' ? '?' : verdict === 'praise' ? '★' : '✓';
+    }
+    const verdictLabel = $('#summary-verdict-label');
+    if (verdictLabel) verdictLabel.textContent = tMsg('verdict.' + verdict + '.title');
+
+    // Meta line — file/line counts. Tabular numerals so they stay aligned.
+    const meta = $('#summary-meta');
+    if (meta){
+      const files = Number(summary.filesChanged) || 0;
+      const adds = Number(summary.linesAdded) || 0;
+      const dels = Number(summary.linesRemoved) || 0;
+      meta.textContent = tMsg('panel.summaryMeta', { files, adds, dels });
+    }
+
+    // Severity chips in the bar — derived from the *real* findings, not from
+    // the concern bullets, so the count is authoritative. Hidden when zero
+    // for that severity so the bar doesn't show "0 critical".
+    const chips = $('#summary-sev-chips');
+    if (chips){
+      const counts = { critical: 0, major: 0, minor: 0 };
+      for (const f of (state.findings || [])){
+        if (counts[f.severity] !== undefined) counts[f.severity]++;
+      }
+      chips.innerHTML = ['critical','major','minor'].map(sev => {
+        const n = counts[sev];
+        const hidden = n === 0 ? ' hidden' : '';
+        return '<span class="summary__sev-chip" data-sev="'+sev+'"'+hidden+'>'
+          + '<span class="summary__sev-dot" aria-hidden="true"></span>'
+          + n + ' ' + tMsg('panel.' + sev)
+          + '</span>';
+      }).join('');
+    }
+  }
+
+  function renderSummaryBody(summary){
+    const lead = $('#exec-text');
+    const text = summary.executiveSummary || '';
+    // innerHTML is safe here — escMd HTML-escapes first, then only adds
+    // a fixed <code class="md-code"> wrapper around backtick spans. No
+    // user-controlled tags survive the escape pass.
+    lead.innerHTML = escMd(text);
+
+    // Long summaries get clamped to 3 lines + inline expand toggle. The
+    // threshold is generous (240 chars) so short summaries aren't gratuitously
+    // truncated.
+    const isLong = text.length > 240;
+    lead.classList.toggle('summary__lead--clamped', isLong);
+    const root = $('#summary');
+    let expand = root.querySelector('.summary__expand');
+    if (isLong){
+      if (!expand){
+        expand = document.createElement('button');
+        expand.type = 'button';
+        expand.className = 'summary__expand';
+        expand.textContent = tMsg('panel.execExpand');
+        expand.addEventListener('click', () => {
+          const clamped = lead.classList.toggle('summary__lead--clamped');
+          expand.textContent = tMsg(clamped ? 'panel.execExpand' : 'panel.execCollapse');
+        });
+        // Insert right after the lead paragraph.
+        lead.insertAdjacentElement('afterend', expand);
+      } else {
+        expand.hidden = false;
+        expand.textContent = tMsg('panel.execExpand');
+      }
+    } else if (expand){
+      expand.hidden = true;
+    }
+
+    // Concerns — each bullet gets a heuristic severity for the colored dot.
+    const concerns = summary.topConcerns || [];
+    const concernsWrap = $('#summary-concerns');
+    if (concerns.length){
+      concernsWrap.hidden = false;
+      $('#concerns-count').textContent = '· ' + concerns.length;
+      $('#concerns').innerHTML = concerns.map(c => {
+        const sev = classifyConcernSeverity(c);
+        const attr = sev ? ' data-sev="'+sev+'"' : '';
+        return '<li'+attr+'>'+escMd(c)+'</li>';
+      }).join('');
+    } else {
+      concernsWrap.hidden = true;
+    }
+
+    // Strengths — secondary, smaller, no severity coloring.
+    const strengths = summary.strengths || [];
+    const strengthsWrap = $('#summary-strengths');
+    if (strengths.length){
+      strengthsWrap.hidden = false;
+      $('#strengths-count').textContent = '· ' + strengths.length;
+      $('#strengths').innerHTML = strengths.map(s => '<li>'+escMd(s)+'</li>').join('');
+    } else {
+      strengthsWrap.hidden = true;
+    }
+  }
+
+  function applySummaryCollapse(){
+    const root = $('#summary');
+    if (root.hidden) return;
+    const collapsed = !!state.summaryCollapsed;
+    const body = $('#summary-body');
+    const toggle = $('#summary-toggle');
+    body.hidden = collapsed;
+    toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   }
 
   function applyResult(r){
     state.result = r;
     if (!r){
-      $('#exec').hidden = true; $('#bullets').hidden = true;
+      $('#summary').hidden = true;
       state.findings = []; bumpCounter(); renderFindings(); return;
     }
     state.findings = r.findings || [];
     bumpCounter(); renderFindings();
-    $('#exec').hidden = false;
-    $('#exec-text').textContent = r.summary.executiveSummary || '';
-    $('#bullets').hidden = false;
-    $('#concerns').innerHTML = (r.summary.topConcerns||[]).map(c => '<li>'+esc(c)+'</li>').join('') || '<li style="color:var(--fg-subtle)">none</li>';
-    $('#strengths').innerHTML = (r.summary.strengths||[]).map(c => '<li>'+esc(c)+'</li>').join('') || '<li style="color:var(--fg-subtle)">none</li>';
-    $('#verdict').dataset.v = r.summary.overallVerdict || 'approve-with-comments';
-    $('#verdict').textContent = (r.summary.overallVerdict || '').toUpperCase();
+
+    const root = $('#summary');
+    root.hidden = false;
+    renderSummaryBar(r.summary);
+    renderSummaryBody(r.summary);
+    applySummaryCollapse();
+
+    setVerdict(r.summary.overallVerdict || 'approve-with-comments');
     const pill = $('#branches');
     pill.setAttribute('data-visible', '1');
     pill.textContent = r.summary.branch + ' ← ' + r.summary.baseBranch;

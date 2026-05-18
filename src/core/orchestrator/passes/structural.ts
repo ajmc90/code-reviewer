@@ -4,13 +4,17 @@ import { parseStructuralOutput } from '../../../claude/structuralParser';
 import { loadRelatedFiles, charsForBudget } from '../../../context/fileContext';
 import { OrchestratorDeps } from '../types';
 import { runCliWithTools } from '../cli';
+import { PassMetrics, metricsFromCliResult } from '../metrics';
 
 function buildEnrichedDiff(loadedFiles: { path: string; content: string }[], rawDiff: string): string {
   const contextSection = buildContextSection(loadedFiles);
   return contextSection ? `${contextSection}\n\n--- UNIFIED DIFF (base...head) ---\n${rawDiff}` : rawDiff;
 }
 
-export async function runStructuralPass(deps: OrchestratorDeps, state: PartialReviewState): Promise<number> {
+export async function runStructuralPass(
+  deps: OrchestratorDeps,
+  state: PartialReviewState,
+): Promise<{ findingCount: number; metrics: PassMetrics }> {
   const { log, workspaceRoot } = deps;
   const prompt = buildStructuralExplorationPrompt({
     ctx: state.ctx,
@@ -18,8 +22,8 @@ export async function runStructuralPass(deps: OrchestratorDeps, state: PartialRe
     changedFiles: state.changedFiles,
     conventions: state.conventions,
   });
-  const text = await runCliWithTools(deps, prompt, 'structural', ['Read', 'Grep', 'Glob']);
-  const exploration = parseStructuralOutput(text);
+  const r = await runCliWithTools(deps, prompt, 'structural', ['Read', 'Grep', 'Glob']);
+  const exploration = parseStructuralOutput(r.text);
   state.structuralRisks = exploration.observedRisks;
   log(`Structural pass: ${exploration.filesToInclude.length} extra files requested, ${exploration.observedRisks.length} risks observed.`);
 
@@ -39,5 +43,5 @@ export async function runStructuralPass(deps: OrchestratorDeps, state: PartialRe
   state.loadedFiles.push(...related);
   log(`Structural pass added ${related.length} related files.`);
   state.enrichedDiff = buildEnrichedDiff(state.loadedFiles, state.rawDiff);
-  return 0;
+  return { findingCount: 0, metrics: metricsFromCliResult(r, prompt.length) };
 }

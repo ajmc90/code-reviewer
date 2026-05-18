@@ -112,7 +112,10 @@ function renderHover(f: Finding): vscode.MarkdownString {
   }
   if (f.suggestedFix) {
     md.appendMarkdown(`**Suggested fix** (confidence: \`${f.suggestedFix.confidence}\`)\n\n${f.suggestedFix.description}\n\n`);
-    md.appendCodeblock(f.suggestedFix.replacement, guessLang(f.file));
+    // Show the resulting code from whichever schema the fix carries — new
+    // search/replace fixes expose newString; legacy fixes carry replacement.
+    const fixCode = f.suggestedFix.newString ?? f.suggestedFix.replacement;
+    if (fixCode) md.appendCodeblock(fixCode, guessLang(f.file));
     const applyCmd = vscode.Uri.parse(
       `command:claudeReviewer.applyFix?${encodeURIComponent(JSON.stringify([f.id]))}`,
     );

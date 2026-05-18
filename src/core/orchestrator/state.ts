@@ -1,4 +1,4 @@
-import { shouldIgnore } from '../../git/gitService';
+import { shouldIgnore, stripExcludedFilesFromDiff } from '../../git/gitService';
 import { buildContextSection } from '../../claude/prompts';
 import { detectProjectContext, readConventions } from '../../context/projectContext';
 import {
@@ -47,6 +47,22 @@ export async function bootstrapState(
     throw new Error(`No changes between ${opts.baseBranch} and ${opts.headBranch}.`);
   }
 
+  // Strip content of files matched by contextExcludeGlobs (lockfiles, snapshots,
+  // generated locales) from the rawDiff that goes to the model. These files
+  // still appear in changedFiles (the user sees them in the panel) but their
+  // hunks are replaced with a one-line marker, saving cache_creation tokens
+  // every pass.
+  const excludedPaths = new Set(
+    changedFiles
+      .filter((f) => shouldIgnore(f.path, deps.contextExcludeGlobs))
+      .map((f) => f.path),
+  );
+  if (excludedPaths.size > 0) {
+    const before = rawDiff.length;
+    rawDiff = stripExcludedFilesFromDiff(rawDiff, excludedPaths);
+    log(`Context-excluded ${excludedPaths.size} file(s) from diff (${before} → ${rawDiff.length} chars): ${[...excludedPaths].slice(0, 5).join(', ')}${excludedPaths.size > 5 ? '…' : ''}`);
+  }
+
   let truncated = false;
   if (rawDiff.length > deps.maxDiffBytes) {
     log(`Diff is large (${rawDiff.length} bytes). Chunking by file.`);
@@ -67,7 +83,10 @@ export async function bootstrapState(
   const contextBudget = Math.max(0, totalBudgetChars - diffBudgetReserved);
   let loadedFiles: FileContextEntry[] = [];
   if (contextBudget > 5000) {
-    const loaded = loadFullFilesForDiff({ workspaceRoot, changedFiles, budgetChars: contextBudget, perFileMaxChars: 40000 });
+    // Don't waste budget loading content for files we already excluded from
+    // the diff — same logic, applied consistently.
+    const loadableFiles = changedFiles.filter((f) => !excludedPaths.has(f.path));
+    const loaded = loadFullFilesForDiff({ workspaceRoot, changedFiles: loadableFiles, budgetChars: contextBudget, perFileMaxChars: 40000 });
     loadedFiles = loaded.entries;
     log(`Loaded ${loadedFiles.length} changed-file contents (~${loadedFiles.reduce((a, f) => a + f.content.length, 0)} chars).`);
   }

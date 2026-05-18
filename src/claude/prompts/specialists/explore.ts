@@ -1,7 +1,7 @@
 import { ChangeMapEntry, DiffFile, FindingIndexEntry, ProjectContext, ReasoningDepth } from '../../../types';
 import { Lang } from '../../../i18n';
 import { buildSystemPreamble } from '../system';
-import { JSON_CONTRACT } from '../shared';
+import { JSON_CONTRACT_FINDINGS_ONLY } from '../shared';
 
 // ─── PHASE A — DISCOVERY ──────────────────────────────────────────────
 
@@ -50,16 +50,17 @@ export function buildExplorePrompt(args: {
     '    { "file": "src/foo.ts", "kind": "new-feature", "blastRadius": "module", "note": "adds public Foo API used by bar" },',
     '    { "file": "src/bar.ts", "kind": "refactor",    "blastRadius": "local" }',
     '  ],',
-    '  "summary": { "overallVerdict": "...", "executiveSummary": "...", "topConcerns": [...], "strengths": [...], "riskScore": 0 },',
     '  "findings": [ ... as in the standard contract ... ]',
     '}',
+    '',
+    'DO NOT include a "summary" key — a dedicated summary pass runs at the end and any summary here is discarded.',
     '',
     'changeMap rules:',
     '- kind ∈ "new-feature" | "refactor" | "bugfix" | "migration" | "config" | "deps" | "test" | "docs" | "style" | "other"',
     '- blastRadius ∈ "local" (only this file) | "module" (this file + siblings/callers in same area) | "cross-cutting" (touches many unrelated areas, e.g. utility used everywhere)',
     '- One entry per changed file. note is optional (≤ 90 chars).',
     '',
-    JSON_CONTRACT,
+    JSON_CONTRACT_FINDINGS_ONLY,
   ]
     .filter(Boolean)
     .join('\n');
