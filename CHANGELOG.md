@@ -5,6 +5,20 @@ All notable changes to **Claude Branch Reviewer** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-17
+
+### Added
+- **Timeline chip tooltips** — hovering each per-pass telemetry chip (tokens, cache %, time, tools, findings) now reveals what the metric means plus the underlying numbers (input/output split, cache hit ratio, CLI-vs-wall time, tool names). Lets users read a pass's cost shape without opening the output channel.
+- **Sidebar history mini-cards** — recent reviews are rendered as self-contained cards with a verdict-tinted left strip, a two-line layout (branches + verdict pill, then severity chips + relative time), and polished hover/focus states. Replaces the previous one-line rows. Includes a "clean" pill when a review had no critical/major findings.
+- **Locate branches** — new "Locate" action in the branch picker clears any active filter and scrolls to the selected base + head, making it easy to find them in long branch lists.
+
+### Fixed
+- **Stop mid-flight now pauses instead of discarding** — pressing Stop while a pass was running emitted `cancelled` and threw away the partial state. Now it snapshots state, emits `paused`, and surfaces the Resume banner so the review can be continued from where it stopped.
+- **Sidebar "running" state after pause** — the sidebar reducer kept the `running` surface (with Stop button visible) after a `paused` event, since the partial summary was pushed separately. Now the reducer flips to `idle` on pause so the partial summary card takes over cleanly.
+
+### Changed
+- **README** — highlights condensed, panel/architecture/cost-estimate detail moved under collapsible sections, screenshots refreshed with italics captions describing what each one shows.
+
 ## [0.3.0] — 2026-05-16
 
 ### Added

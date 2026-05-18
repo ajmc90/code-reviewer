@@ -76,18 +76,18 @@ The review panel opens beside your editor. Pick a base + head, choose which pass
 
 The panel is a drag-resizable two-pane layout with a collapsible left rail and an activity-bar sidebar that mirrors progress.
 
-- **Branch picker** — local + remote branches with author / subject / age, fetch & prune in one click, ahead-behind counter, SSH-passphrase prompts handled inline.
+- **Branch picker** — local + remote branches with author / subject / age, fetch & prune in one click, ahead-behind counter, SSH-passphrase prompts handled inline. **Locate** clears the filter and scrolls to the selected base + head in long branch lists.
 - **Analysis passes** — pill checkboxes grouped by phase, with presets (*fast*, *deep*, *security focus*, *performance focus*, *accessibility focus*). Selection persists across sessions.
 - **Advanced Options** — inline `fast / balanced / deep / obsessive` depth picker, *Session reuse* toggle, *Developer diagnostics* toggle. Each change writes through to `settings.json` and re-runs the cost estimate.
 - **Cost pill + confirm modal** — `~95K tokens · ~6 min · $0.45 ref` with a `cold / partial / calibrated` badge; click for a per-pass breakdown. Estimates above ~200K tokens open a confirmation modal with files / lines / driving factors and a "don't ask again under N tokens" opt-out.
-- **Live activity** — per-pass timeline (queued → running → done), streaming snippet of Claude's current thinking, inline Retry / Skip / Stop on failure, and a `◆ in=42K (cache 78%) out=1.2K · $0.012 · 8.3s` line per completed pass.
+- **Live activity** — per-pass timeline (queued → running → done), streaming snippet of Claude's current thinking, inline Retry / Skip / Stop on failure, and a `◆ in=42K (cache 78%) out=1.2K · $0.012 · 8.3s` line per completed pass. Each telemetry chip carries a tooltip explaining the metric and showing the underlying numbers (input/output split, cache hit ratio, CLI-vs-wall time, tool names).
 - **Change map** — the explore pass classifies each changed file (`new-feature`, `refactor`, `bugfix`, `migration`, `config`, `deps`, `test`, `docs`, `style`) with a blast-radius badge, surfaced above the findings grid.
 - **Executive summary** — verdict, risk score, top concerns, strengths — emitted on completion.
 - **Findings grid + filters** — Problem ↔ Solution cards with severity ribbon, category badge, jump-to-code, apply fix, ask follow-up, dismiss/restore, and a per-card EN/ES translation chip. Filter by severity (critical / major / minor / nit / **praise** / silenced / **revised**), category, or free-text search. *Praise* surfaces what the diff did well; *Revised* surfaces critique's audit trail.
 
 ### Sidebar dashboard
 
-The activity-bar view is the always-visible companion to the panel: idle / running / paused / failed / done state pill, a live progress card with phase fraction + findings count + elapsed time + Cancel, a paused-review banner with Resume / Discard (flagged when the paused review is on a different branch), the last review's verdict + risk + summary + Export Report, and history of the latest review per `(base, head)` pair (up to 5).
+The activity-bar view is the always-visible companion to the panel: idle / running / paused / failed / done state pill, a live progress card with phase fraction + findings count + elapsed time + Cancel, a paused-review banner with Resume / Discard (flagged when the paused review is on a different branch), the last review's verdict + risk + summary + Export Report, and a history of mini-cards (one per `(base, head)` pair, verdict-tinted strip on the left, up to 5) — click any to rehydrate.
 
 > **Keyboard:** `Cmd/Ctrl + Alt + R` starts a review.
 
@@ -431,7 +431,7 @@ Package as a `.vsix`:
 
 ```bash
 pnpm run package
-code --install-extension claude-branch-reviewer-0.3.0.vsix
+code --install-extension claude-branch-reviewer-0.4.0.vsix
 ```
 
 > **vsce + pnpm quirk:** `vsce publish` invokes `npm ls` under the hood and trips over pnpm's symlinked `node_modules` layout, even though `vsce package` works fine. Package first, then publish the produced `.vsix` explicitly: `npx vsce publish --packagePath claude-branch-reviewer-<version>.vsix`. See [RELEASE.md](RELEASE.md) for the full publish flow.
