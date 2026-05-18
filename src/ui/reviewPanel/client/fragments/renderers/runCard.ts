@@ -16,9 +16,19 @@ export const RUN_CARD = `
     const chipsEl = $('#run-chips');
     const msgEl = $('#run-msg');
     const btn = $('#btn-start');
-    const btnLabel = btn && btn.querySelector('.run-card__btn-label');
-    const btnIcon = btn && btn.querySelector('.run-card__btn-icon');
-    if (!chipsEl || !msgEl || !btn || !btnLabel || !btnIcon) return;
+    if (!chipsEl || !msgEl || !btn) return;
+    // If any code path replaced the button's innerHTML and dropped the
+    // icon/label spans, rebuild them so subsequent renders keep working.
+    // Without this guard, render becomes a permanent no-op once the spans
+    // are gone, leaving the button frozen at whatever flat text was set.
+    let btnIcon = btn.querySelector('.run-card__btn-icon');
+    let btnLabel = btn.querySelector('.run-card__btn-label');
+    if (!btnIcon || !btnLabel){
+      btn.innerHTML = '<span aria-hidden="true" class="run-card__btn-icon"></span>' +
+                      '<span class="run-card__btn-label"></span>';
+      btnIcon = btn.querySelector('.run-card__btn-icon');
+      btnLabel = btn.querySelector('.run-card__btn-label');
+    }
 
     // ── Running ────────────────────────────────────────────────
     if (state.isRunning){

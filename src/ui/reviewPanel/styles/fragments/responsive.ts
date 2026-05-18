@@ -67,6 +67,8 @@ export const RESPONSIVE_CSS = String.raw`
    * left pane; the user reaches it by scrolling, like any other section. */
   .section--run{
     position: static;
+    margin: 0;
+    padding: 0;
     box-shadow: none;
     border-top: 0;
     background: transparent;

@@ -25,6 +25,7 @@ export const BRANCH_PICKER = `
       rootEl.innerHTML = '<div class="branch-empty">'+esc(tMsg('branch.noMatch'))+'</div>';
       return;
     }
+    let selectedEl = null;
     for (const b of list){
       const isSel = selected === b.name;
       const el = document.createElement('div');
@@ -46,6 +47,53 @@ export const BRANCH_PICKER = `
         if (ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); pickBranch(role, b.name) }
       });
       rootEl.appendChild(el);
+      if (isSel) selectedEl = el;
+    }
+    // Only auto-scroll when the selection is offscreen — avoids snapping the
+    // list back to the top when the user has scrolled elsewhere just to read
+    // around. scrollIntoView with block:'nearest' is a no-op when visible.
+    if (selectedEl) scrollSelectedIntoView(rootEl, selectedEl);
+  }
+
+  /**
+   * Scroll the list to bring the selected branch into view IF it's offscreen.
+   * Uses manual scrollTop math instead of element.scrollIntoView() because
+   * scrollIntoView can scroll ancestor containers too (the whole left pane in
+   * this case) — we want to confine the scroll to the branch list only.
+   */
+  function scrollSelectedIntoView(rootEl, el){
+    const rTop = rootEl.scrollTop;
+    const rBot = rTop + rootEl.clientHeight;
+    const eTop = el.offsetTop;
+    const eBot = eTop + el.offsetHeight;
+    if (eTop < rTop){
+      rootEl.scrollTop = Math.max(0, eTop - 8);
+    } else if (eBot > rBot){
+      rootEl.scrollTop = eBot - rootEl.clientHeight + 8;
+    }
+  }
+
+  /**
+   * "Locate" affordance — clears the search filter (so the selected branches
+   * aren't filtered out) and centers each list on its selection. Useful when
+   * the list has scrolled away after a long session.
+   */
+  function locateSelectedBranches(){
+    if (state.branchSearch){
+      state.branchSearch = '';
+      const input = $('#branch-filter');
+      if (input) input.value = '';
+    }
+    renderBranchPicker();
+    const baseList = $('#base-list');
+    const headList = $('#head-list');
+    if (baseList && state.selectedBase){
+      const sel = baseList.querySelector('.branch[aria-selected="true"]');
+      if (sel) scrollSelectedIntoView(baseList, sel);
+    }
+    if (headList && state.selectedHead){
+      const sel = headList.querySelector('.branch[aria-selected="true"]');
+      if (sel) scrollSelectedIntoView(headList, sel);
     }
   }
   function pickBranch(role, name){

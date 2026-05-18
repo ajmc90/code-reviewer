@@ -20,25 +20,25 @@ No API key. No extra cost. Just your existing Claude subscription.
 > Reviews **any git branch against any base**, in **any language**, with **multiple reasoning passes** that question themselves, explore alternatives, and anchor every comment to an exact file + line range — with an applicable fix.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/panel-overview.png" alt="Claude Branch Reviewer — review panel" width="100%" />
+  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/panel-overview.png" alt="Claude Branch Reviewer — full review panel with branch picker, analysis passes, cost pill, executive summary and findings grid" width="100%" />
 </p>
+
+<p align="center"><em>The review panel after a run: branch picker, pass selector and cost pill on the left; verdict, summary and filterable findings on the right; sidebar dashboard always visible.</em></p>
 
 ## Highlights
 
-- **🔬 Multi-pass reasoning** — five phases (discovery → specialists → consolidation → completeness → critique), each with a job. The final pass critiques the rest.
-- **🧪 Self-critique with an audit trail** — the critique pass labels every prior finding **keep / revise / drop / merge** with an explicit reason. Dropped and merged findings don't vanish silently: they live under a dedicated **Revised** chip with the reasoning, so you can second-guess critique instead of trusting it blindly.
-- **📍 Pinpoint anchoring** — every finding maps to `file:start-end`. One click jumps to the exact range.
-- **🧠 Shows its work** — title, reasoning, questions raised, alternatives considered, evidence quotes, suggested fix.
-- **🎨 Modern review panel** — toggleable passes, severity + category filters, drag-resizable layout, collapsible sidebar, sidebar dashboard for at-a-glance status.
-- **⏸ Pause & resume** — if a pass fails or you cancel, the review snapshots itself and offers a one-click Resume with per-pass Retry.
-- **🔁 Apply Fix preview** — every suggested fix opens as a VS Code diff editor. Edit the right side, then Apply or Discard from the editor title.
-- **🔕 Silence noise** — dismiss findings as "this exact one" or "this pattern, everywhere". Future reviews demote matches to a `silenced` badge instead of nagging again. Restore any rule from the picker.
-- **🌐 Bilingual UI** — full English/Spanish UI with on-demand per-finding translation (each card has its own EN/ES chip).
-- **💰 Pre-flight cost estimate** — before you press RUN, a cost pill shows projected **tokens · wall-clock · USD reference** for the exact diff + passes + depth you've picked. Click it for a per-pass breakdown. A confirmation modal pops up when the estimate crosses ~200K tokens so a heavy review never starts by accident.
-- **📈 Self-calibrating estimator** — each completed pass records real token / cost / wall-clock telemetry. After 5+ runs in a workspace, a per-workspace regression replaces the cold-start heuristics — the estimate gets noticeably tighter for *your* repo + *your* machine. A `cold / partial / calibrated` badge on the pill tells you which mode it's in.
-- **♻ Session reuse** — passes share a Claude CLI session (`--session-id` / `--resume`) so the cached prompt context isn't paid for on every pass. Cuts review cost ~60-70% on large diffs. Toggleable from the Advanced Options panel.
-- **⚙ Advanced Options panel** — depth (`fast / balanced / deep / obsessive`), session reuse, and developer diagnostics live inline next to the pass selector with the trade-off explained per option. Changes update settings.json and the cost estimate live.
-- **🧩 Adapts to your project** — auto-detects language, framework, tests, and reads `CLAUDE.md` / `README.md` / `CONTRIBUTING.md` / `ARCHITECTURE.md`.
+- **🔬 Multi-pass reasoning** — five phases (discovery → specialists → consolidation → completeness → critique). The final pass critiques the rest.
+- **🧪 Self-critique audit trail** — critique tags every prior finding **keep / revise / drop / merge** with a reason. Dropped/merged ones live under a **Revised** chip instead of vanishing.
+- **📍 Pinpoint anchoring** — every finding maps to `file:start-end`; one click jumps to the range. Gutter markers + hover included.
+- **🧠 Shows its work** — title, reasoning, open questions, alternatives, evidence quotes and a suggested fix per finding.
+- **💰 Pre-flight cost estimate** — a cost pill shows projected **tokens · wall-clock · USD ref** for *this* diff with *these* passes. A `cold / partial / calibrated` badge tells you how trustworthy it is, and a confirmation modal blocks accidental >200K-token runs.
+- **📈 Self-calibrating** — every pass records real telemetry; after 5+ runs a per-workspace regression replaces cold-start heuristics so estimates tighten for *your* repo + *your* machine.
+- **♻ Session reuse** — passes share a Claude CLI session (`--session-id` / `--resume`), reusing the prompt cache and cutting review cost ~60-70% on large diffs.
+- **⏸ Pause, resume & retry** — failed or cancelled reviews snapshot themselves; one-click Resume with per-pass Retry.
+- **🔁 Apply Fix preview** — fixes open as a VS Code diff editor; edit the right side, then Apply or Discard from the title bar.
+- **🔕 Silence noise** — dismiss findings as "this one" or "this pattern, everywhere"; future matches come back muted with a 🔕 badge, restorable any time.
+- **🌐 Bilingual UI** — English/Spanish UI with on-demand per-finding translation (EN/ES chip on each card).
+- **🧩 Adapts to your project** — auto-detects language, framework, tests; reads `CLAUDE.md` / `README.md` / `CONTRIBUTING.md` / `ARCHITECTURE.md`.
 - **🔐 No API key** — talks to the `claude` CLI you're already logged into.
 
 ---
@@ -68,39 +68,26 @@ The review panel opens beside your editor. Pick a base + head, choose which pass
 
 ## The review panel
 
-A second-screen-worthy UI built into VS Code.
-
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/findings-grid.png" alt="Findings grid with severity ribbons and filters" width="100%" />
+  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/findings-grid.png" alt="Live activity timeline with per-pass telemetry, plus a findings grid that includes a Revised by Critique section" width="100%" />
 </p>
 
-| Area | What it gives you |
-|---|---|
-| **Branch picker** | Local + remote branches, filterable, with last author / subject / age. Fetch & prune with one click; ahead/behind counter. SSH-passphrase prompts handled inline. |
-| **Analysis passes** | Pill checkboxes grouped by phase (Discovery, Specialists, Completeness, Critique). Presets — *fast*, *deep*, *security focus*, *performance focus*, *accessibility focus* — flip the right set with one click. Per-pass tooltips explain what each does. Advanced toggle hides the granular controls when you don't need them. Selection persists across sessions. |
-| **Advanced Options** | Lives inside the same *Advanced* collapsible: a segmented `fast / balanced / deep / obsessive` depth picker, a *Session reuse* toggle (`~60-70% cheaper`), and a *Developer diagnostics* toggle. Every change writes through to `settings.json` and re-runs the cost estimate so the pill stays in sync. |
-| **Cost pill** | Above the RUN button: `~95K tokens · ~6 min · $0.45 ref` with a `cold / partial / calibrated` confidence badge. Click for a per-pass breakdown popover (tokens per pass + low / high / worst-case range + the human-readable factors driving the estimate: depth, session reuse, sample-count corrections). Auto-positions up or down depending on viewport space. |
-| **Confirm-large-run modal** | When the estimate crosses ~200K tokens, pressing RUN opens a modal: headline tokens + range, "what's in this review" (files / lines / driving factors), subscription-cost disclaimer, and a "don't ask again under N tokens" checkbox that bumps your personal threshold to the next clean tier (250K / 500K / 1M / 2M / 5M). Escape, click-outside, or Cancel back out cleanly. |
-| **Run card** | Sticky bottom card summarizes branches + active passes. One ▶ button covers Start / Stop. Live progress chips during a run: phase, findings found, elapsed time. The log lives collapsed inside the run card as an audit trail. |
-| **Welcome surface** | When idle and no findings exist, the right pane shows the welcome panel: branches + diff preview + estimate, the four-phase pipeline cards, a big RUN proxy of the left button, the `Cmd+Alt+R` shortcut, a privacy reminder, and a daily-rotating tip. |
-| **In-progress surface** | While the review is running and no findings have arrived yet, the right pane shows the in-progress panel: live tokens spent, files reviewed (with kind + blast-radius chips), elapsed time, animated skeleton placeholders. Once findings start arriving, a sticky progress header above the findings grid keeps those live signals visible. |
-| **Live activity** | Real-time timeline of each pass: queued → running → done, with elapsed time, a streaming snippet of what Claude is thinking, and inline Retry / Skip / Stop on failure. Each completed pass also drops a `◆ $0.0123 in=42K (cache 78%) out=1.2K 8.3s` telemetry line so the cost shape is visible without opening the output channel. |
-| **Change map** | When the explore pass classifies each changed file (`new-feature`, `refactor`, `bugfix`, `migration`, `config`, `deps`, `test`, `docs`, `style`) with a blast-radius badge, the panel surfaces it as a collapsible map above the findings grid. |
-| **Log** | Raw streaming output, severity-colored. Collapsed inside the run card by default — toggle to expand. Copy or clear. |
-| **Executive summary** | Verdict, risk score, top concerns, strengths — emitted once the review finishes. Verdict strings the model occasionally writes as full sentences (`"DO NOT MERGE…"`) get normalized into the badge enum so the sidebar layout never breaks. |
-| **Findings grid** | Problem ↔ Solution cards. Severity ribbon, category badge, jump-to-code, apply fix, ask follow-up, dismiss / restore. Per-card EN/ES chip translates that finding on demand. "Related" badges link refinements back to their original finding. |
-| **Filters** | Severity chips (critical / major / minor / nit / **praise** / silenced / **revised**) + category chips (security, accessibility, performance, …) with live counts + free-text search. Combine freely. *Praise* is a positive-signal severity — Claude calls out things the diff did well (good test coverage, clean abstractions, careful error handling) so the review isn't only negative. The *Revised* chip surfaces critique's audit trail; on the **All** filter, silenced + revised findings drop below a labeled separator so the main severity flow stays focused. |
-| **Collapse + resize** | Click ‹ to collapse the left pane into a vertical rail showing branches, current pass, spinner, and live severity counts. Drag the gutter between panes to resize (or `←/→` while focused, `Home/End` for min/max, dbl-click to reset). Width and collapse state persist. |
+<p align="center"><em>While a review runs, the centre column streams a live timeline (one card per pass with <code>◆ tokens · cache % · cost · duration</code> telemetry); the right column fills with findings, including a <strong>Revised by Critique</strong> section where dropped and merged findings keep their audit trail.</em></p>
+
+The panel is a drag-resizable two-pane layout with a collapsible left rail and an activity-bar sidebar that mirrors progress.
+
+- **Branch picker** — local + remote branches with author / subject / age, fetch & prune in one click, ahead-behind counter, SSH-passphrase prompts handled inline.
+- **Analysis passes** — pill checkboxes grouped by phase, with presets (*fast*, *deep*, *security focus*, *performance focus*, *accessibility focus*). Selection persists across sessions.
+- **Advanced Options** — inline `fast / balanced / deep / obsessive` depth picker, *Session reuse* toggle, *Developer diagnostics* toggle. Each change writes through to `settings.json` and re-runs the cost estimate.
+- **Cost pill + confirm modal** — `~95K tokens · ~6 min · $0.45 ref` with a `cold / partial / calibrated` badge; click for a per-pass breakdown. Estimates above ~200K tokens open a confirmation modal with files / lines / driving factors and a "don't ask again under N tokens" opt-out.
+- **Live activity** — per-pass timeline (queued → running → done), streaming snippet of Claude's current thinking, inline Retry / Skip / Stop on failure, and a `◆ in=42K (cache 78%) out=1.2K · $0.012 · 8.3s` line per completed pass.
+- **Change map** — the explore pass classifies each changed file (`new-feature`, `refactor`, `bugfix`, `migration`, `config`, `deps`, `test`, `docs`, `style`) with a blast-radius badge, surfaced above the findings grid.
+- **Executive summary** — verdict, risk score, top concerns, strengths — emitted on completion.
+- **Findings grid + filters** — Problem ↔ Solution cards with severity ribbon, category badge, jump-to-code, apply fix, ask follow-up, dismiss/restore, and a per-card EN/ES translation chip. Filter by severity (critical / major / minor / nit / **praise** / silenced / **revised**), category, or free-text search. *Praise* surfaces what the diff did well; *Revised* surfaces critique's audit trail.
 
 ### Sidebar dashboard
 
-A second view lives in the activity-bar sidebar — the "always visible" companion to the big panel.
-
-- **At-a-glance state** — idle / running / paused / failed / done, with a colored brand pill.
-- **Live progress card** — phase fraction (e.g. `2/4 passes`), current pass label, live findings count, elapsed time. Cancel button included.
-- **Paused review banner** — when a review stopped mid-flight, the banner shows completed / skipped / pending counts and offers **Resume** + **Discard**. Highlights when the paused review is from a different branch than your current checkout.
-- **Last review summary** — branch pair, verdict, risk, severity chips, executive summary, top concerns, strengths, and **Export Report**.
-- **History** — the most recent review for each `(base, head)` branch pair, up to 5 entries total. Click any row to rehydrate that review back into the panel + tree + decorations.
+The activity-bar view is the always-visible companion to the panel: idle / running / paused / failed / done state pill, a live progress card with phase fraction + findings count + elapsed time + Cancel, a paused-review banner with Resume / Discard (flagged when the paused review is on a different branch), the last review's verdict + risk + summary + Export Report, and history of the latest review per `(base, head)` pair (up to 5).
 
 > **Keyboard:** `Cmd/Ctrl + Alt + R` starts a review.
 
@@ -124,103 +111,56 @@ Passes are organized into five phases. The pipeline goes **A → B → C → D �
 | **E · Critique + summary** | **Self-critique** | Tags every prior finding **keep / revise / drop / merge** with a reason. Dropped + merged ones go to the *Revised* chip (audit trail); revised ones keep a snapshot of what changed. |
 | | **Final summary** | Verdict · risk score · executive summary · top concerns · strengths |
 
-Each finding includes:
-
-- `file` + `startLine` + `endLine` (clickable → editor jumps to the range)
-- **Title**, **description**, **reasoning** ("why is this a problem")
-- **Questions Claude asked itself** at this spot
-- **Alternatives considered**, with trade-offs
-- **Evidence** — direct quotes from the diff
-- **Suggested fix** with confidence and replacement code
-- **"Related" link** when a later pass refines a prior finding instead of duplicating it
-- Gutter markers + end-of-line tags + rich hover
+Each finding includes a clickable `file:start-end` range, title + description + reasoning, the open questions Claude asked itself, alternatives considered with trade-offs, evidence quotes from the diff, a suggested fix with confidence + replacement code, and a "Related" link when a later pass refines a prior finding. Gutter markers, end-of-line tags and rich hovers are wired in the editor.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/finding-detail.png" alt="Expanded finding card showing Problem on the left and Solution on the right" width="100%" />
+  <img src="https://raw.githubusercontent.com/ajmc90/code-reviewer/main/public/finding-detail.png" alt="Expanded finding card showing Problem, Reasoning, Solution with replacement code, open questions, alternatives, evidence and related files — Advanced Options panel visible on the left" width="100%" />
 </p>
+
+<p align="center"><em>An expanded finding: problem → reasoning → solution with the proposed diff and confidence badge, plus open questions, alternatives considered, evidence and related files. The Advanced Options panel (depth, session reuse) sits on the left.</em></p>
 
 ### Apply Fix — interactive preview
 
-Hitting **Apply Fix** on a finding doesn't write to disk immediately. Instead it opens a VS Code diff editor: your file on the left, the proposed fix on the right. You can **edit the right side** before applying — Claude's suggestion is a starting point, not a final answer. The editor title gets two actions:
-
-- **Apply this fix** — writes the right-pane contents to the real file and closes the diff.
-- **Discard fix** — closes the preview without touching anything.
+**Apply Fix** opens a VS Code diff editor (your file on the left, the proposed fix on the right) instead of writing to disk. Edit the right side, then use **Apply this fix** or **Discard fix** from the editor title bar — Claude's suggestion is a starting point, not the final word.
 
 ### Silence noise across reviews
 
-Findings you dismiss are remembered. The dismiss popup offers two scopes:
-
-- **Silence just this finding** — matches by `file:start-end + title`. Subsequent reviews demote the same finding at the same location.
-- **Silence this pattern everywhere** — matches by `category + title`. Demotes any future finding with that signature anywhere in the project.
-
-Matched findings come back as `severity: 'silenced'` with a 🔕 badge — visible (so you know it returned), muted (so it doesn't fight real-severity findings for attention). One click **Restore** un-silences. The command palette exposes **Unsilence a Finding…** to inspect/remove individual rules, and **Clear All Silenced Findings** to nuke the memory.
+Dismissing a finding offers two scopes: **just this finding** (`file:start-end + title`) or **this pattern everywhere** (`category + title`). Future matches return as `severity: 'silenced'` with a 🔕 badge — visible but muted. One-click **Restore** un-silences; the command palette has **Unsilence a Finding…** and **Clear All Silenced Findings** for managing the rule set.
 
 ### Self-critique audit trail
 
-The critique pass doesn't quietly delete findings. For every prior finding it emits one of four decisions:
-
-- **keep** — load-bearing as-is.
-- **revise** — wording, severity, or category changed. The card keeps a snapshot of the pre-critique version so you can compare.
-- **drop** — judged not load-bearing for this branch. Stays in the panel with a `DROPPED` badge.
-- **merge** — folded into another finding. Stays with a `MERGED` badge and a link to the survivor.
-
-Dropped and merged findings don't appear in the main severity flow — they sit behind the **Revised** chip in the filter row. The sidebar progress card shows the delta in real time (`−6 dropped · −4 merged · 2 revised`), so the count drop is explained, not mysterious. Every decision has a reason from critique attached, surfaced inside the expanded card as a **Self-critique's review** section. Findings that critique referenced by an internal scaffolding id (e.g. `f3 describes the same SQL injection as f2`) get the ids substituted for the actual finding titles before display.
+Critique emits a decision for every prior finding — **keep**, **revise** (wording / severity / category changed, with a snapshot of the pre-critique version), **drop** (`DROPPED` badge, not load-bearing) or **merge** (`MERGED` badge + link to the survivor). Dropped and merged findings move behind the **Revised** chip rather than vanishing, and the sidebar shows the delta live (`−6 dropped · −4 merged · 2 revised`). Each decision's reason is shown inside the expanded card as **Self-critique's review**.
 
 ---
 
 ## Cost estimate & calibration
 
-Before you press RUN, the panel preflights the actual diff (`git diff base...head`) and asks the estimator what a review of *this* diff with *these* passes at *this* depth will cost. The result lands in the cost pill above the RUN button.
+Before you press RUN, the panel preflights the diff (`git diff base...head`) and estimates the cost of *this* diff with *these* passes at *this* depth. The cost pill shows projected **tokens · wall-clock · USD ref** with a confidence badge:
 
-**What the estimate shows**
+- `cold` — no samples yet, hardcoded coefficients.
+- `partial` — 1-4 prior runs, not enough for the regression.
+- `calibrated` — 5+ runs; a per-workspace multiplicative correction (clamped 0.4×–2.5×, MAPE-tracked) replaces the cold-start coefficients.
 
-- **Central tokens** — projected sum of effective input + output tokens across every planned pass. The headline metric, because subscription users pay in token budget, not USD.
-- **Wall-clock duration** — per-pass baseline scaled by diff size (sub-linear curve) and depth multiplier.
-- **USD reference** — what the same call sequence would cost at API-direct prices (Opus 4.7 1M, current cache/output tiers). Shown smaller, with a disclaimer that subscription users don't pay this amount.
-- **Confidence badge** — `cold` (no samples yet, hardcoded coefficients), `partial` (1-4 samples — not enough for the regression), or `calibrated` (5+ samples — per-workspace correction is active).
-- **Per-pass breakdown** — click the pill: token cost per pass + low / high / worst-case range + the human-readable factors (`session reuse on — saves ~15% on input tokens`, `depth=obsessive adds ~40% over deep`, `calibrated from 7 prior runs (×0.82 duration, ×0.91 cost)`, …).
+Click the pill for a per-pass breakdown with low / high / worst-case range and the factors driving the estimate. When the headline tokens cross **200K**, RUN opens a confirmation modal with a "don't ask again under N tokens" opt-out that bumps your threshold to the next clean tier (250K / 500K / 1M / 2M / 5M).
 
-**Cost components the estimator models**
+<details>
+<summary>How the estimator works</summary>
 
-- Per-pass base prompt (system preamble + JSON contract + pass instructions).
-- Diff context tokens (raw diff for structural; enriched diff = raw + loaded file content for the rest).
-- Per-pass output tokens, scaled by depth and by the running count of prior findings (critique re-serializes every prior finding — it grows fastest).
-- Cache reuse curve: when session reuse is on, pass N within a session sees a ~`min(0.85, 0.4 + 0.07·N)` cache-read hit ratio. Modeled per-pass-index.
-- Haiku-vs-Opus overhead from the CLI's internal routing.
-- Variance band: low ×0.7, high ×1.5, worst-case ×2.5.
+The model accounts for per-pass base prompt (system + JSON contract + instructions), diff context (raw for structural, enriched for the rest), output tokens scaled by depth and by the running prior-findings count, the cache-reuse curve when session reuse is on (`~min(0.85, 0.4 + 0.07·N)` hit ratio at pass N), Haiku-vs-Opus routing overhead, and a variance band (low ×0.7, high ×1.5, worst-case ×2.5).
 
-**How calibration works**
+Every completed pass emits a telemetry record (token buckets, cost, cache split, model breakdown, retries, durations) — `[telemetry]` NDJSON in the output channel plus a ◆ line in the live log. End-of-review aggregates into a sample stored in **workspaceState** (preferred) and **globalState** (fallback). A schema version on each sample drops stale data when coefficients change.
 
-Every completed pass emits a telemetry record (token buckets, cost, cache split, model breakdown, tools invoked, retries, durations) — prefixed `[telemetry]` in the output channel as one-line NDJSON, plus a human-readable ◆ line in the live log. At end-of-review the orchestrator aggregates them into a sample, stored in two scopes:
+**Debug commands**: `Estimate Review Cost (Debug)` prints the full estimator output without running anything; `Dump Estimator Samples (Debug)` shows what the regression is fitting.
 
-- **workspaceState** — narrow, fits this repo's diff shapes and patterns.
-- **globalState** — broader fallback across repos.
-
-The estimator prefers workspace samples once 5+ exist; otherwise falls back to global, then to hardcoded coefficients. The regression fits a per-scope multiplicative correction (median actual ÷ predicted ratio, clamped 0.4×–2.5×) and surfaces MAPE so the confidence badge can flag drift. A schema version on each sample invalidates older ones when coefficients change so stale data can't poison the fit.
-
-**Confirmation threshold**
-
-When the central estimate crosses **200,000 tokens**, pressing RUN opens a confirmation modal instead of starting immediately. You can opt out under your own threshold via the "don't ask again" checkbox — it bumps your threshold to the next clean tier (100K / 250K / 500K / 1M / 2M / 5M / 10M) so suppression is intuitive. The preference is panel-local (per webview, via `vscode.setState`), not a project setting.
-
-**Debug commands**
-
-- `Claude Review: Estimate Review Cost (Debug)` — print the full estimator output (per-pass tokens, USD, factors, sample counts) to the output channel without running anything.
-- `Claude Review: Dump Estimator Samples (Debug)` — dump every persisted sample so you can see what the regression is fitting.
+</details>
 
 ---
 
 ## Session reuse
 
-When session reuse is on (default), the orchestrator opens **two** Claude CLI sessions per review and shares each across the passes that fit:
+With session reuse on (default), the orchestrator opens **two** Claude CLI sessions per review — `withTools` (structural pass only) and `noTools` (everything else) — and threads `--session-id` / `--resume` so the prompt cache survives across passes. The CLI reports the saving as cache-read tokens (typically 10× cheaper than fresh input); empirically **~60-70% cost reduction** vs. spawning isolated processes.
 
-- **`withTools` session** — structural pass only (tools: Read, Grep, Glob).
-- **`noTools` session** — explore + specialists + completeness + critique + summary (no tools).
-
-Each first call inside a session uses `--session-id <uuid>`; every subsequent call uses `--resume <uuid>` so the prompt cache from the previous call is reused. The CLI reports the saving as cache-read tokens (typically 10× cheaper than fresh input). Empirically: ~60-70% cost reduction vs. spawning isolated CLI processes per pass.
-
-If `--resume` ever fails (session expired, corrupted state), the orchestrator resets that session and the next pass creates a fresh one — the review keeps running, you just lose cache reuse for one call.
-
-Toggle it via the Advanced Options panel or `claudeReviewer.useSessionReuse`. Disable only if you suspect cross-pass interference (the prompt cache holds every prior call's context).
+If `--resume` ever fails (expired or corrupted session), the orchestrator resets that session and the next pass starts fresh — the review keeps running. Toggle via the Advanced Options panel or `claudeReviewer.useSessionReuse`; disable only if you suspect cross-pass interference.
 
 ---
 
@@ -315,7 +255,10 @@ Toggle it via the Advanced Options panel or `claudeReviewer.useSessionReuse`. Di
 
 ## Architecture
 
-The codebase is organized into focused modules — no file mixes presentation, business logic, and state. Prompts are split per analysis pass (one file per specialist). Webview UIs are bundled from a tree of small fragments (each CSS section and each client-JS responsibility lives in its own file) so the working set stays small. The few top-level files you'll see inside `core/` are thin compatibility re-exports — the real code lives one level deeper, grouped by intent (`events/`, `stores/`, `controllers/`, `orchestrator/`).
+The codebase is organised into focused modules — no file mixes presentation, business logic and state. Prompts are split per analysis pass (one file per specialist). Webview UIs are bundled from small fragments (each CSS section and each client-JS responsibility in its own file) so the working set stays small. Top-level files inside `core/` are thin compat re-exports; the real code lives one level deeper, grouped by intent (`events/`, `stores/`, `controllers/`, `orchestrator/`).
+
+<details>
+<summary>Full source tree</summary>
 
 ```text
 src/
@@ -452,6 +395,8 @@ src/
     └── fixPreview.ts             # claude-fix:// text-document provider for the diff preview
 ```
 
+</details>
+
 ---
 
 ## Privacy
@@ -495,9 +440,7 @@ code --install-extension claude-branch-reviewer-0.3.0.vsix
 
 ## Support the project ☕
 
-This extension is free, MIT-licensed, and doesn't talk to any backend of its own — your Claude subscription does all the work. But building it, fixing your bug reports, and shipping new passes happens on nights and weekends, fueled by **a dangerous amount of coffee**.
-
-If Claude Branch Reviewer caught a bug before code review did, saved you an hour of "what is this PR even doing", or just made your reviewer's job a little less painful — consider buying me a coffee.
+This extension is free, MIT-licensed and has no backend of its own — your Claude subscription does all the work. If it caught a bug before review did or saved you an hour of "what is this PR even doing", consider buying me a coffee.
 
 <p align="center">
   <a href="https://buymeacoffee.com/ajmc90">
@@ -505,9 +448,7 @@ If Claude Branch Reviewer caught a bug before code review did, saved you an hour
   </a>
 </p>
 
-Stars on GitHub and reviews on the Marketplace are also a great free way to help — they make the project visible to other devs who could use it.
-
-> **Pro tip:** every coffee unlocks ~30 minutes of staring at TypeScript errors I will fix for you. ☕ = 🐛 ⬇
+Stars on GitHub and Marketplace reviews are also a free way to help — they make the project visible to other devs.
 
 ---
 

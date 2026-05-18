@@ -217,19 +217,21 @@ export const PASS_SELECTOR_CSS = String.raw`
 
 /* Run section — primary CTA card. Sticky so it survives scroll.
  *
- * The container needs an OPAQUE backdrop, not a gradient: the gradient
- * approach left a ~12px band where content scrolling under the sticky
- * area showed through, making the run-card look like it was floating on
- * top of the picker / passes list. We use the same elevated background
- * as the .left pane (so the seam between scrolled content and sticky
- * area is invisible) plus a thin top border to anchor the card visually
- * without a hard line across the panel. */
+ * Bleeds to the full width AND bottom of the .left pane via negative margins
+ * (cancels the pane's --s-5 padding on all 3 sides) so the sticky band fully
+ * covers the bottom of the panel and nothing from the scrolled timeline above
+ * can peek through on the sides or underneath. The negative bottom margin is
+ * matched by extra bottom padding so the card itself keeps its breathing room
+ * inside the (now larger) band. */
 .section--run{
-  position: sticky; bottom: 0;
-  padding: var(--s-2) 0 0;
+  position: sticky; bottom: calc(-1 * var(--s-5));
+  margin: 0 calc(-1 * var(--s-5)) calc(-1 * var(--s-5));
+  padding: var(--s-3) var(--s-5) calc(var(--s-4) + var(--s-5));
   z-index: 5;
-  background: var(--bg-elev);
-  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  /* Solid opaque base — color-mix with the theme's bg guarantees no token
+   * transparency can let scrolled content show through underneath. */
+  background-color: var(--bg);
+  background-image: linear-gradient(var(--bg-elev), var(--bg-elev));
   /* Soft drop shadow ABOVE the card (negative y) so scrolled content fades
    * into the sticky area instead of butting up against the border. */
   box-shadow: 0 -8px 12px -6px color-mix(in srgb, var(--bg) 60%, transparent);
@@ -239,7 +241,10 @@ export const PASS_SELECTOR_CSS = String.raw`
   padding: var(--s-3);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  background: color-mix(in srgb, var(--accent) 4%, var(--bg));
+  /* Opaque base ensures scrolled content underneath cannot bleed through
+   * the tinted accent overlay. */
+  background: var(--bg-elev);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-elev));
   box-shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.05);
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
@@ -248,10 +253,10 @@ export const PASS_SELECTOR_CSS = String.raw`
 }
 .run-card[data-state="running"]{
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: color-mix(in srgb, var(--accent) 7%, var(--bg));
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-elev));
 }
 .run-card[data-state="blocked"]{
-  background: var(--bg);
+  background: var(--bg-elev);
 }
 .run-card__head{
   display: flex; align-items: center; gap: var(--s-2);

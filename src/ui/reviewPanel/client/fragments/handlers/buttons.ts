@@ -20,6 +20,8 @@ export const BUTTONS = `
     state.runStartedAt = null;
     state.currentPhase = null;
     if (state.stopWatchdog){ clearTimeout(state.stopWatchdog); state.stopWatchdog = null; }
+    reconcileRunningSteps(Date.now(), tMsg('timeline.cancelled'));
+    renderTimeline();
     renderRunCard();
     renderCostPill();
   }
@@ -88,6 +90,9 @@ export const BUTTONS = `
   $('#branch-filter').addEventListener('input', (e) => { state.branchSearch = e.target.value; renderBranchPicker() });
   $('#show-local').addEventListener('change', (e) => { state.showLocal = e.target.checked; renderBranchPicker() });
   $('#show-remote').addEventListener('change', (e) => { state.showRemote = e.target.checked; renderBranchPicker() });
+  $('#btn-locate').addEventListener('click', () => {
+    locateSelectedBranches();
+  });
   $('#btn-fetch').addEventListener('click', () => {
     if (state.fetching) return;
     state.fetching = true;
@@ -100,7 +105,15 @@ export const BUTTONS = `
       // double-clicked while the cancellation propagates.
       const b = $('#btn-start');
       b.setAttribute('aria-disabled', 'true');
-      b.innerHTML = '<span aria-hidden="true">■</span> '+esc(tMsg('panel.stopping'));
+      // Mutate the existing icon + label spans IN PLACE. Replacing innerHTML
+      // wholesale would destroy '.run-card__btn-icon' / '.run-card__btn-label',
+      // and renderRunCard early-returns when those children are missing — so
+      // the next terminal event (cancelled/done/paused) would be unable to
+      // repaint the button and it would freeze at "Stopping…" forever.
+      const icon = b.querySelector('.run-card__btn-icon');
+      const label = b.querySelector('.run-card__btn-label');
+      if (icon) icon.textContent = '■';
+      if (label) label.textContent = tMsg('panel.stopping');
       vscode.postMessage({type:'cancelReview'});
       // Watchdog: if no terminal event (cancelled/done/paused) arrives within
       // 12s, force-reset the button. Protects against host-side hangs (CLI
@@ -115,7 +128,11 @@ export const BUTTONS = `
           state.isRunning = false;
           state.runStartedAt = null;
           state.currentPhase = null;
+          // Mark any pass still showing the running spinner as stopped so the
+          // timeline doesn't keep an infinite "Sending prompt…" row alive.
+          reconcileRunningSteps(Date.now(), tMsg('timeline.cancelled'));
           appendLive('warn', tMsg('log.cancelTimeout'), 'review');
+          renderTimeline();
           renderRunCard();
           renderCostPill();
         }

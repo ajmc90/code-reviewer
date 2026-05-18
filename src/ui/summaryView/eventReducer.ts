@@ -101,9 +101,11 @@ export function reduceEvent(state: RunState, e: ReviewEvent): ReduceResult {
     case 'cancelled':
       return { state: { kind: 'cancelled' }, shouldTick: false };
     case 'paused':
-      // The partial summary is pushed separately via setPartialSummary; the
-      // reducer just stops ticking.
-      return { state, shouldTick: false };
+      // Leave the 'running' surface — the partial summary card (driven by
+      // setPartialSummary) takes over. Staying in 'running' would keep the
+      // RUNNING pill + Stop button visible forever after the user stopped a
+      // mid-flight review.
+      return { state: { kind: 'idle' }, shouldTick: false };
     default:
       return { state, shouldTick: state.kind === 'running' };
   }

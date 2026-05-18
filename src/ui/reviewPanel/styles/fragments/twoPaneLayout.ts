@@ -45,11 +45,19 @@ main[data-collapsed="1"] .left > .left-rail{ display: flex }
 
 .right{
   overflow:auto;
-  padding: var(--s-5) var(--s-6);
+  /* Top padding intentionally 0: a sticky child (.filters-wrap) needs the
+   * scroll viewport's top edge to be at coord 0 so it can fully cover scrolled
+   * content behind it. The visual top breathing room is restored via the
+   * first child's own padding-top (.summary or .filters-wrap). */
+  padding: 0 var(--s-6) var(--s-5);
   min-width: 0;
   container-type: inline-size;
   container-name: right;
 }
+/* Restore top breathing room as padding/margin on whichever element is the
+ * first child of .right, so the sticky filter wrap below it can still pin
+ * flush to coord 0 of the scroll viewport. */
+.right > .summary{ margin-top: var(--s-5) }
 .left::-webkit-scrollbar, .right::-webkit-scrollbar{ width:10px; height:10px }
 .left::-webkit-scrollbar-thumb, .right::-webkit-scrollbar-thumb{
   background: color-mix(in srgb, var(--fg) 14%, transparent); border-radius: var(--r-sm);

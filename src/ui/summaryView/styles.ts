@@ -309,68 +309,240 @@ details p, details ul{ padding: 0 var(--s-2) var(--s-2) }
 details ul{ padding-left: calc(var(--s-2) + var(--s-4)) }
 details p{ font-size: var(--t-xs); color: var(--fg-muted); line-height: 1.55 }
 
-/* History */
-.hist{ list-style: none; padding: 0; margin: 0 }
-.hist__row{
+/* History — each review is rendered as its own self-contained mini-card
+   stacked inside the section card. A 3px verdict-tinted strip on the left
+   edge gives instant outcome recognition at a glance; hover lifts the card
+   1px and brings the strip to full saturation. Layout per card:
+     row top: [head → base] ........................ [verdict pill]
+     row bot: [● 1 crit] [● 3 maj] / [• clean]       29m ago        */
+.hist{
+  list-style: none;
+  padding: 0; margin: 0;
+  display: flex; flex-direction: column;
+  gap: 6px;
+}
+.card--history{
+  /* Slightly inset content so the inner mini-cards have breathing room
+     on the sides without colliding with the outer card border. */
+  padding: var(--s-3) var(--s-2) calc(var(--s-2) + 2px);
+}
+.card--history .card__h{
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 calc(var(--s-1) + 2px);
+  margin-bottom: var(--s-2);
+}
+.card__h-text{ flex: 0 0 auto }
+.card__h-count{
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 17px; height: 17px;
+  padding: 0 5px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg-muted);
+  border-radius: 9px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Mini-card per review ──────────────────────────────────────── */
+.hist__card{
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-1) var(--s-2);
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fg) 9%, transparent);
+  border-radius: 7px;
   cursor: pointer;
-  transition: background 120ms ease;
+  overflow: hidden;
+  transition: background 140ms ease, border-color 140ms ease,
+              transform 140ms ease, box-shadow 140ms ease;
 }
-.hist__row:hover, .hist__row:focus-visible{
+.hist__card:hover{
   background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-color: color-mix(in srgb, var(--fg) 16%, transparent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px -2px color-mix(in srgb, var(--bg) 65%, transparent);
 }
-.hist__main{
+.hist__card:focus-visible{
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.hist__card:active{
+  transform: translateY(0);
+}
+
+/* Verdict-tinted strip down the left edge — muted at rest, saturated on
+   hover. Width grows from 2px to 3px on hover for a subtle "engage" cue. */
+.hist__card-strip{
+  flex: 0 0 2px;
+  background: var(--fg-subtle);
+  opacity: .5;
+  transition: width 140ms ease, opacity 140ms ease, background 140ms ease;
+}
+.hist__card[data-verdict="block"]                 .hist__card-strip{ background: var(--sev-critical) }
+.hist__card[data-verdict="needs-changes"]         .hist__card-strip{ background: var(--sev-major) }
+.hist__card[data-verdict="approve-with-comments"] .hist__card-strip{ background: var(--sev-minor) }
+.hist__card[data-verdict="approve"]               .hist__card-strip{ background: var(--sev-nit) }
+.hist__card[data-verdict="praise"]                .hist__card-strip{ background: var(--sev-praise) }
+.hist__card:hover .hist__card-strip,
+.hist__card:focus-visible .hist__card-strip{
+  flex-basis: 3px;
+  opacity: 1;
+}
+
+.hist__card-body{
   flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px 8px 10px;
+  display: flex; flex-direction: column;
+  gap: 6px;
+}
+
+.hist__row{
+  display: flex; align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+/* ── Branch chips ──────────────────────────────────────────────── */
+.hist__branches{
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex; align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+.hist__head, .hist__base{
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--t-xs);
-  display:flex; align-items:center; gap: 2px;
-}
-.hist__head, .hist__base{
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
   font-size: 11px;
+  letter-spacing: -.01em;
+  border: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
 }
-.hist__vs{ color: var(--fg-subtle); padding: 0 2px }
-.hist__side{
-  display:flex; align-items:center; gap: 4px;
-  font-size: 10px;
+.hist__head{
+  flex: 1 1 auto;
+  color: var(--fg);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.hist__base{
+  flex: 0 1 auto;
+  max-width: 50%;
   color: var(--fg-muted);
-  flex-shrink: 0;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  font-weight: 500;
 }
+.hist__arrow{
+  color: var(--fg-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* ── Verdict pill ──────────────────────────────────────────────── */
 .hist__verdict{
-  padding: 1px 5px;
-  border-radius: 3px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 10px;
   font-weight: 700;
-  letter-spacing: .06em;
+  letter-spacing: .055em;
+  font-size: 9.5px;
+  text-transform: uppercase;
   color: var(--accent-fg);
   background: var(--fg-subtle);
   white-space: nowrap;
   flex-shrink: 0;
+  box-shadow:
+    0 1px 0 color-mix(in srgb, #000 12%, transparent) inset,
+    0 -1px 0 color-mix(in srgb, #fff 18%, transparent) inset;
 }
-/* Same overflow protection as .verdict, scoped to non-tooltip variants. */
 .hist__verdict:not(.tip-host){
-  max-width: 120px;
+  max-width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.hist__verdict-ico{
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  background: color-mix(in srgb, #000 22%, transparent);
+  color: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+.hist__verdict-text{
+  font-variant-numeric: tabular-nums;
+}
 .hist__verdict[data-v="block"]                 { background: var(--sev-critical) }
 .hist__verdict[data-v="needs-changes"]         { background: var(--sev-major); color:#1a1a1a }
+.hist__verdict[data-v="needs-changes"] .hist__verdict-ico{ background: color-mix(in srgb, #000 25%, transparent); color:#1a1a1a }
 .hist__verdict[data-v="approve-with-comments"] { background: var(--sev-minor) }
 .hist__verdict[data-v="approve"]               { background: var(--sev-nit); color:#0a2e1c }
+.hist__verdict[data-v="approve"] .hist__verdict-ico{ background: color-mix(in srgb, #000 22%, transparent); color:#0a2e1c }
 .hist__verdict[data-v="praise"]                { background: var(--sev-praise) }
-.hist__counts{ display:inline-flex; gap: 2px }
-.hist__crit{ background: var(--sev-critical); color: #fff; padding: 0 4px; border-radius: 3px; font-weight: 700 }
-.hist__maj { background: var(--sev-major);    color: #1a1a1a; padding: 0 4px; border-radius: 3px; font-weight: 700 }
-.hist__ago{ color: var(--fg-subtle) }
+
+/* ── Severity chips ────────────────────────────────────────────── */
+.hist__counts{
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.hist__sev{
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px 2px 6px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
+  line-height: 1.4;
+}
+.hist__sev-dot{
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, currentColor 15%, transparent);
+}
+.hist__sev-n{ font-variant-numeric: tabular-nums }
+.hist__sev[data-sev="critical"]{
+  color: color-mix(in srgb, var(--sev-critical) 85%, var(--fg));
+  background: color-mix(in srgb, var(--sev-critical) 14%, transparent);
+  border-color: color-mix(in srgb, var(--sev-critical) 28%, transparent);
+}
+.hist__sev[data-sev="critical"] .hist__sev-dot{ background: var(--sev-critical) }
+.hist__sev[data-sev="major"]{
+  color: color-mix(in srgb, var(--sev-major) 92%, var(--fg));
+  background: color-mix(in srgb, var(--sev-major) 14%, transparent);
+  border-color: color-mix(in srgb, var(--sev-major) 28%, transparent);
+}
+.hist__sev[data-sev="major"] .hist__sev-dot{ background: var(--sev-major) }
+.hist__sev--clean{
+  color: color-mix(in srgb, var(--sev-nit) 88%, var(--fg));
+  background: color-mix(in srgb, var(--sev-nit) 10%, transparent);
+  border-color: color-mix(in srgb, var(--sev-nit) 24%, transparent);
+  text-transform: lowercase;
+}
+.hist__sev--clean .hist__sev-dot{ background: var(--sev-nit) }
+
+.hist__ago{
+  color: var(--fg-subtle);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  margin-left: auto;
+  cursor: help;
+}
 
 .hint{
   color: var(--fg-subtle);

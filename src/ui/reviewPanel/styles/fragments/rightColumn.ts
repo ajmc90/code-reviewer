@@ -250,18 +250,32 @@ export const RIGHT_COLUMN_CSS = String.raw`
    * pane when no review is running. */
   top: var(--filters-sticky-top, 0);
   z-index: 5;
-  padding: var(--s-3) 0 var(--s-2);
-  background: linear-gradient(
-    to bottom,
-    var(--bg) 0%,
-    var(--bg) calc(100% - 6px),
-    color-mix(in srgb, var(--bg) 0%, transparent) 100%
-  );
-  /* When the summary bar sits above, the sticky filters need a tiny offset
-   * so the summary's bottom edge still reads cleanly. summary already has
-   * its own margin-bottom; this just guards against zero-margin themes. */
-  margin-top: calc(-1 * var(--s-2));
+  /* Bleed horizontally to the full width of the .right scroll container
+   * (cancels the pane's --s-6 horizontal padding) so the sticky band reaches
+   * both edges. Without this, scrolled finding cards show through the strip
+   * of pane padding to the LEFT and RIGHT of the chip row. Inner padding
+   * restores the chip row's original horizontal inset. */
+  margin-left: calc(-1 * var(--s-6));
+  margin-right: calc(-1 * var(--s-6));
+  /* Vertical padding — top breathing room when this wrap is the first child
+   * of .right (no summary above); see the .right > .filters-wrap rule. */
+  padding: var(--s-2) var(--s-6) var(--s-2);
+  /* Solid opaque base — flat gradient ensures no theme-token transparency
+   * can let scrolled cards bleed through. */
+  background-color: var(--bg);
+  background-image: linear-gradient(var(--bg), var(--bg));
 }
+/* Top breathing room: the .right pane's top padding is 0 so the sticky
+ * filter wrap can pin flush to the scroll viewport's top edge (otherwise
+ * scrolled cards leak through the pane's padding strip). The visible top
+ * gap is instead carried on whichever element actually sits first:
+ *  - .summary when it's visible (gets margin-top via .right > .summary)
+ *  - .filters-wrap when summary is hidden ([hidden] removes it from layout,
+ *    so :first-child below picks the wrap).
+ * .summary uses the [hidden] attribute, which removes it from the box tree;
+ * :first-child then correctly matches .filters-wrap. */
+.right > .filters-wrap:first-child,
+.right > [hidden] + .filters-wrap{ padding-top: var(--s-5) }
 .filters-wrap[hidden]{ display: none }
 .filters{
   display:flex; gap: var(--s-2); flex-wrap:wrap; align-items:center;

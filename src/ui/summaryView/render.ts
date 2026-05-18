@@ -46,11 +46,13 @@ export function renderVerdictBadge(
   displayLabel: string,
   lang: Lang,
   className: 'verdict' | 'hist__verdict' = 'verdict',
+  opts: { rawHtml?: boolean } = {},
 ): string {
   const v = String(verdictRaw || '').toLowerCase();
+  const labelHtml = opts.rawHtml ? displayLabel : esc(displayLabel);
   const VALID = new Set(['block', 'needs-changes', 'approve-with-comments', 'approve', 'praise']);
   if (!VALID.has(v)) {
-    return `<span class="${className}" data-v="${esc(v)}">${esc(displayLabel)}</span>`;
+    return `<span class="${className}" data-v="${esc(v)}">${labelHtml}</span>`;
   }
   // Open downward + right-aligned. The sidebar verdict sits near the top of
   // each card (LAST REVIEW) or row (RECENT REVIEWS history), so opening
@@ -59,7 +61,7 @@ export function renderVerdictBadge(
   // keeps it from spilling past the card's right edge.
   const title = esc(t(`verdict.${v}.title` as Parameters<typeof t>[0], lang));
   const hint = esc(t(`verdict.${v}.hint` as Parameters<typeof t>[0], lang));
-  return `<span class="${className} tip-host" data-v="${esc(v)}" tabindex="0">${esc(displayLabel)}<span class="tip tip--end" role="tooltip"><span class="tip__title">${title}</span><span class="tip__hint">${hint}</span></span></span>`;
+  return `<span class="${className} tip-host" data-v="${esc(v)}" tabindex="0">${labelHtml}<span class="tip tip--end" role="tooltip"><span class="tip__title">${title}</span><span class="tip__hint">${hint}</span></span></span>`;
 }
 
 interface ViewState {
@@ -255,6 +257,19 @@ function renderLastResult(s: ViewState): string {
     </section>`;
 }
 
+/**
+ * Single-character glyph that matches each verdict's visual identity. Mirrors
+ * the icons the panel uses in the summary bar (renderSummaryBar) so the
+ * sidebar history feels visually consistent with the main view.
+ */
+function verdictGlyph(verdict: string): string {
+  const v = String(verdict || '').toLowerCase();
+  if (v === 'block') return '!';
+  if (v === 'needs-changes') return '?';
+  if (v === 'praise') return '★';
+  return '✓';
+}
+
 function renderHistory(s: ViewState): string {
   const entries = s.history.slice(0, 5);
   if (entries.length === 0) return '';
@@ -262,27 +277,60 @@ function renderHistory(s: ViewState): string {
   const items = entries
     .map((e) => {
       const ago = formatAgo(Date.now() - e.finishedAt, lang);
-      const counts = e.critical + e.major > 0
-        ? `<span class="hist__counts">${e.critical ? `<span class="hist__crit">${e.critical}</span>` : ''}${e.major ? `<span class="hist__maj">${e.major}</span>` : ''}</span>`
-        : '';
+      const verdictV = String(e.verdict || '').toLowerCase();
+
+      // Severity chips: critical first, major second. When both are zero
+      // (clean review or only minors), show a muted "clean" pill so the row
+      // still has a stable visual anchor in the meta line.
+      const counts: string[] = [];
+      if (e.critical > 0) {
+        counts.push(
+          `<span class="hist__sev" data-sev="critical" title="${esc(t('panel.critical', lang))}"><span class="hist__sev-dot" aria-hidden="true"></span><span class="hist__sev-n">${e.critical}</span></span>`,
+        );
+      }
+      if (e.major > 0) {
+        counts.push(
+          `<span class="hist__sev" data-sev="major" title="${esc(t('panel.major', lang))}"><span class="hist__sev-dot" aria-hidden="true"></span><span class="hist__sev-n">${e.major}</span></span>`,
+        );
+      }
+      const countsHtml = counts.length
+        ? `<span class="hist__counts">${counts.join('')}</span>`
+        : `<span class="hist__sev hist__sev--clean" title="${esc(t('summary.noCriticalOrMajor', lang))}"><span class="hist__sev-dot" aria-hidden="true"></span><span class="hist__sev-n">${esc(t('summary.clean', lang))}</span></span>`;
+
+      const verdictBadge = renderVerdictBadge(
+        e.verdict,
+        `<span class="hist__verdict-ico" aria-hidden="true">${verdictGlyph(e.verdict)}</span><span class="hist__verdict-text">${esc((e.verdict || '').toUpperCase())}</span>`,
+        lang,
+        'hist__verdict',
+        { rawHtml: true },
+      );
+
       return /* html */ `
-        <li class="hist__row" data-recall="${esc(e.id)}" role="button" tabindex="0">
-          <span class="hist__main">
-            <code class="hist__head">${esc(e.headBranch)}</code>
-            <span class="hist__vs">${esc(t('summary.vs', lang))}</span>
-            <code class="hist__base">${esc(e.baseBranch)}</code>
-          </span>
-          <span class="hist__side">
-            ${renderVerdictBadge(e.verdict, (e.verdict || '').toUpperCase(), lang, 'hist__verdict')}
-            ${counts}
-            <span class="hist__ago">${esc(ago)}</span>
-          </span>
+        <li class="hist__card" data-recall="${esc(e.id)}" data-verdict="${esc(verdictV)}" role="button" tabindex="0" aria-label="${esc(t('summary.recallAria', lang, { head: e.headBranch, base: e.baseBranch, verdict: (e.verdict || '').toUpperCase(), ago }))}">
+          <span class="hist__card-strip" aria-hidden="true"></span>
+          <div class="hist__card-body">
+            <div class="hist__row hist__row--top">
+              <div class="hist__branches">
+                <code class="hist__head" title="${esc(e.headBranch)}">${esc(e.headBranch)}</code>
+                <span class="hist__arrow" aria-hidden="true">→</span>
+                <code class="hist__base" title="${esc(e.baseBranch)}">${esc(e.baseBranch)}</code>
+              </div>
+              ${verdictBadge}
+            </div>
+            <div class="hist__row hist__row--bot">
+              ${countsHtml}
+              <span class="hist__ago" title="${esc(new Date(e.finishedAt).toLocaleString())}">${esc(ago)}</span>
+            </div>
+          </div>
         </li>`;
     })
     .join('');
   return /* html */ `
     <section class="card card--history">
-      <h4 class="card__h">${esc(t('summary.history', lang))}</h4>
+      <h4 class="card__h">
+        <span class="card__h-text">${esc(t('summary.history', lang))}</span>
+        <span class="card__h-count" aria-label="${esc(t('summary.historyCountAria', lang, { count: entries.length }))}">${entries.length}</span>
+      </h4>
       <ul class="hist">${items}</ul>
     </section>`;
 }

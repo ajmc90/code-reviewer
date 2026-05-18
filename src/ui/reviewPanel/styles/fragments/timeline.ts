@@ -27,6 +27,11 @@ export const TIMELINE_CSS = String.raw`
   border: 1px solid var(--border);
   background: var(--bg);
   min-width: 0;
+  /* Reserve space below the step when scrollIntoView pins it — the sticky
+   * .section--run covers the bottom of the .left scroll container, so a naive
+   * scroll would leave the just-started step pinned right under the run-card.
+   * The JS sets --run-h on .left at runtime; this fallback handles first paint. */
+  scroll-margin-bottom: calc(var(--run-h, 200px) + var(--s-3));
   transition:
     background var(--dur-fast) var(--ease),
     border-color var(--dur-fast) var(--ease),
@@ -279,6 +284,35 @@ export const TIMELINE_CSS = String.raw`
   border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   color: var(--fg-muted);
   font-variant-numeric: tabular-nums;
+  /* Chips carry hover tooltips explaining each metric. cursor:help is the
+   * convention for "extra info on hover" without implying click. outline:none
+   * because the .tip-host already shows the popover on :focus-visible. */
+  cursor: help;
+  outline: none;
+}
+/* Hover/focus accent so users discover the chip is interactive. Subtle —
+ * the chip itself is decorative; the value is the headline. */
+.step .chip:hover,
+.step .chip:focus-visible{
+  border-color: color-mix(in srgb, var(--fg) 22%, var(--border));
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+/* Chip-level tip overrides: opens above the chip (the row sits at the
+ * bottom of the card so above keeps it inside the viewport). z-index above
+ * sibling chips so a hovered tooltip isn't clipped by a later chip in the
+ * same flex row.
+ *
+ * Width: the panel can be very narrow (~280px) and chips wrap onto a second
+ * row that often sits flush to the LEFT edge of the card. With a fixed
+ * min-width the popover would push out past the viewport edge and clip
+ * (which was the bug in the wrapped-row screenshot). Use min() so the
+ * popover never exceeds the viewport width minus the panel's left padding,
+ * regardless of which chip is hovered or which row it wrapped onto. */
+.step .chip > .tip{
+  min-width: 0;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 48px));
+  z-index: 40;
 }
 .step .chip__k{
   color: var(--fg-subtle);

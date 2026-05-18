@@ -94,6 +94,9 @@ export function renderBody(lang: Lang, _tr: Tr, trE: TrE): string {
                 autocomplete="off"
                 spellcheck="false"
               />
+              <button class="btn btn--ghost btn--xs" id="btn-locate" type="button" title="${trE('panel.locateTitle')}" aria-label="${trE('panel.locateAria')}">
+                <span aria-hidden="true">⊙</span> ${trE('panel.locate')}
+              </button>
               <button class="btn btn--ghost btn--xs" id="btn-fetch" type="button" title="${trE('panel.fetchTitle')}" aria-label="${trE('panel.fetchAria')}">
                 <span aria-hidden="true">⟳</span> ${trE('panel.fetch')}
               </button>

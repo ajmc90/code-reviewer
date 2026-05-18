@@ -11,6 +11,24 @@
  * message router and the postlude.
  */
 export const EVENT_STREAM = `
+  /**
+   * After a terminal event (cancelled/paused), any step still in 'running'
+   * was the pass that was mid-flight when the user stopped — its passDone /
+   * passError never arrived. Without this, the timeline shows the pass stuck
+   * at "Sending prompt…" with a live spinner forever.
+   */
+  function reconcileRunningSteps(at, detail){
+    for (const [key, info] of state.steps){
+      if (info && info.status === 'running'){
+        state.steps.set(key, Object.assign({}, info, {
+          status: 'error',
+          endedAt: at || Date.now(),
+          detail: detail,
+        }));
+      }
+    }
+  }
+
   function applyEvent(e){
     if (e.kind === 'start'){
       const pill = $('#branches');
@@ -129,6 +147,10 @@ export const EVENT_STREAM = `
       // without firing passDone before the pause). Better to show them than
       // silently drop signal.
       flushAllPending();
+      // Any pass mid-flight when the user stopped never emitted passError —
+      // mark it as stopped here so the timeline doesn't keep showing a
+      // spinning "Sending prompt…" row forever.
+      reconcileRunningSteps(e.at, tMsg('timeline.cancelled'));
       state.isRunning = false;
       state.runStartedAt = null; state.currentPhase = null;
       if (state.stopWatchdog){ clearTimeout(state.stopWatchdog); state.stopWatchdog = null; }
@@ -236,10 +258,13 @@ export const EVENT_STREAM = `
       // Drop anything still buffered — the user canceled, partial in-flight
       // findings would be noise.
       state.pendingByPass.clear();
+      // Any in-flight pass row keeps spinning until we mark it as stopped.
+      reconcileRunningSteps(e.at, tMsg('timeline.cancelled'));
       setVerdict('needs-changes', tMsg('panel.verdictCancelled'));
       state.isRunning = false; state.runStartedAt = null; state.currentPhase = null;
       if (state.stopWatchdog){ clearTimeout(state.stopWatchdog); state.stopWatchdog = null; }
       renderBranchPicker(); renderResumeBanner();
+      renderTimeline();
       renderRunCard();
       renderCostPill();
       renderRightPaneState();

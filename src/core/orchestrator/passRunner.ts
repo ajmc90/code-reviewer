@@ -56,10 +56,13 @@ export async function executePassWithDecisions(
   // eslint-disable-next-line no-constant-condition
   while (true) {
     report(progress, log, label, increment);
-    checkCancel(token);
     events?.emit({ kind: 'passStart', pass, label, at: Date.now() });
     const passStart = Date.now();
     try {
+      // checkCancel lives inside the try so the cancellation branch below can
+      // route it through `paused` (save partial state + emit paused event)
+      // instead of letting a raw `Cancelled` error escape to the controller.
+      checkCancel(token);
       const { findingCount, metrics } = await run();
       state.completedPasses.push(pass);
       deps.onStateSnapshot?.(state);
@@ -89,7 +92,24 @@ export async function executePassWithDecisions(
       }
       return;
     } catch (e: any) {
-      if (token?.isCancellationRequested) throw e;
+      // User clicked Stop while the CLI was mid-flight. Treat this the same as
+      // the "stop" decision branch below: snapshot state, emit `paused` so the
+      // panel can reconcile the in-flight step + show the Resume banner, then
+      // re-raise as ReviewPausedError so the controller persists the partial
+      // (instead of just emitting `cancelled` and discarding the run).
+      if (token?.isCancellationRequested) {
+        state.pausedReason = `${pass}: cancelled by user`;
+        deps.onStateSnapshot?.(state);
+        events?.emit({
+          kind: 'paused',
+          reason: state.pausedReason,
+          completedPasses: [...state.completedPasses],
+          skippedPasses: [...state.skippedPasses],
+          findingCount: state.findings.filter(isVisibleFinding).length,
+          at: Date.now(),
+        });
+        throw new ReviewPausedError(state);
+      }
       const errMsg = e?.message ?? String(e);
       log(`[${pass}] failed: ${errMsg}`);
       events?.emit({ kind: 'passError', pass, error: errMsg, at: Date.now() });
